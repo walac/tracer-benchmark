@@ -46,14 +46,12 @@ struct statistics {
 	u64 median;
 	u64 average;
 	u64 max;
-	u64 *data;
 };
 
 #define STATISTICS_INITIALIZER {	\
 	.median		= 0,		\
 	.average	= 0,		\
 	.max		= 0,		\
-	.data		= NULL,		\
 }
 
 struct percpu_data {
@@ -113,6 +111,29 @@ static DEFINE_PER_CPU(struct percpu_data, data) = {
 
 static DECLARE_COMPLETION(threads_should_run);
 
+static void compute_statistics(struct percpu_data *my_data,
+			       u64 *irqsoff_data, u64 *preempt_data)
+{
+	struct statistics *irqsoff = &my_data->irqsoff;
+	struct statistics *preempt = &my_data->preempt;
+	u64 irqsoff_total = 0, preempt_total = 0;
+
+	for (ulong i = 0; i < nr_samples; ++i) {
+		WARN_ON(check_add_overflow(irqsoff_total,
+						     irqsoff_data[i], &irqsoff_total));
+		WARN_ON(check_add_overflow(preempt_total,
+						     preempt_data[i], &preempt_total));
+	}
+
+	irqsoff->median		= get_median(irqsoff_data, nr_samples);
+	irqsoff->average	= irqsoff_total / nr_samples;
+	irqsoff->max		= irqsoff_data[nr_samples-1];
+
+	preempt->median		= get_median(preempt_data, nr_samples);
+	preempt->average	= preempt_total / nr_samples;
+	preempt->max		= preempt_data[nr_samples-1];
+}
+
 static void sample_thread_fn(unsigned int cpu)
 {
 	u64 *irqsoff, *preempt = NULL;
@@ -147,47 +168,14 @@ static void sample_thread_fn(unsigned int cpu)
 
 out:
 	my_data = get_cpu_ptr(&data);
-	my_data->irqsoff.data = irqsoff;
-	my_data->preempt.data = preempt;
+	compute_statistics(my_data, irqsoff, preempt);
+	kvfree(irqsoff);
+	kvfree(preempt);
+
 	/*
 	 * Avoid we reenter the function before the main task call kthread_stop
 	 */
 	my_data->should_run = false;
-	put_cpu_ptr(&data);
-}
-
-static void sample_thread_cleanup(unsigned int cpu, bool online)
-{
-	struct percpu_data *my_data;
-	struct statistics *irqsoff_stat, *preempt_stat;
-	u64 irqsoff_total = 0, preempt_total = 0;
-
-	pr_debug("sample thread cleanup\n");
-
-	my_data = get_cpu_ptr(&data);
-	irqsoff_stat = &my_data->irqsoff;
-	preempt_stat = &my_data->preempt;
-
-	if (WARN_ON(!online))
-		goto out;
-
-	for (ulong i = 0; i < nr_samples; ++i) {
-		WARN_ON(check_add_overflow(irqsoff_total,
-						     irqsoff_stat->data[i], &irqsoff_total));
-		WARN_ON(check_add_overflow(preempt_total,
-						     preempt_stat->data[i], &preempt_total));
-	}
-
-	irqsoff_stat->median = get_median(irqsoff_stat->data, nr_samples);
-	preempt_stat->median = get_median(preempt_stat->data, nr_samples);
-	irqsoff_stat->average = irqsoff_total / nr_samples;
-	preempt_stat->average = preempt_total / nr_samples;
-	irqsoff_stat->max = irqsoff_stat->data[nr_samples-1];
-	preempt_stat->max = preempt_stat->data[nr_samples-1];
-
-out:
-	kvfree(irqsoff_stat->data);
-	kvfree(preempt_stat->data);
 	put_cpu_ptr(&data);
 }
 
@@ -201,7 +189,6 @@ static DEFINE_PER_CPU(struct task_struct *, ktracer);
 static struct smp_hotplug_thread sample_thread = {
 	.store			= &ktracer,
 	.thread_fn		= sample_thread_fn,
-	.cleanup		= sample_thread_cleanup,
 	.thread_should_run	= sample_thread_should_run,
 	.thread_comm		= "ktracer/%u",
 };
