@@ -193,6 +193,8 @@ static int __init mod_init(void)
 		return -EINVAL;
 	}
 
+	cpus_read_lock();
+
 	ret = smpboot_register_percpu_thread(&sample_thread);
 	if (ret)
 		return ret;
@@ -205,7 +207,6 @@ static int __init mod_init(void)
 
 	smpboot_unregister_percpu_thread(&sample_thread);
 
-	cpus_read_lock();
 	nr_cpus = num_online_cpus();
 
 	irqsoff_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
