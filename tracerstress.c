@@ -90,19 +90,6 @@ static u64 get_median(u64 *p, size_t n)
 	return (p[pos] + p[pos-1]) / 2;
 }
 
-#ifdef DEBUG
-static void print_values(u64 *p, size_t n, const char *name)
-{
-	pr_debug("%s:", name);
-	for (size_t i = 0; i < n; ++i)
-		pr_cont(" %llu", p[i]);
-	pr_cont("\n");
-}
-#else
-static inline void print_values(u64 *p, size_t n, const char *name)
-{}
-#endif
-
 static DEFINE_PER_CPU(struct percpu_data, data) = {
 	.irqsoff	= STATISTICS_INITIALIZER,
 	.preempt	= STATISTICS_INITIALIZER,
@@ -261,9 +248,6 @@ static int __init mod_init(void)
 
 	irqsoff_median = get_median(irqsoff_medians, nr_cpus);
 	preempt_median = get_median(preempt_medians, nr_cpus);
-
-	print_values(irqsoff_medians, nr_cpus, "irqsoff medians");
-	print_values(preempt_medians, nr_cpus, "preempt medians");
 
 	pr_info("irqsoff: average=%llu max=%llu median=%llu\n",
 		irqsoff_total / nr_cpus, irqsoff_max, irqsoff_median);
