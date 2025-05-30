@@ -193,11 +193,7 @@ out:
 
 static int sample_thread_should_run(unsigned int cpu)
 {
-	const struct percpu_data *my_data = get_cpu_ptr(&data);
-	const bool should_run = my_data->should_run;
-
-	put_cpu_ptr(&data);
-	return should_run;
+	return this_cpu_ptr(&data)->should_run;
 }
 
 static DEFINE_PER_CPU(struct task_struct *, ktracer);
