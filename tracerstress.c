@@ -217,7 +217,7 @@ static int __init mod_init(void)
 	u64 *irqsoff_medians, *preempt_medians;
 	u64 irqsoff_median, preempt_median;
 	u64 irqsoff_max = 0, preempt_max = 0;
-	size_t i = 0, n = 0;
+	size_t i, nr_cpus;
 	int ret = 0;
 	unsigned int cpu;
 
@@ -239,10 +239,24 @@ static int __init mod_init(void)
 	smpboot_unregister_percpu_thread(&sample_thread);
 
 	cpus_read_lock();
+	nr_cpus = num_online_cpus();
+
+	irqsoff_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
+	if (!irqsoff_medians) {
+		cpus_read_unlock();
+		return -ENOMEM;
+	}
+
+	preempt_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
+	if (!preempt_medians) {
+		kfree(irqsoff_medians);
+		cpus_read_unlock();
+		return -ENOMEM;
+	}
+
+	i = 0;
 	for_each_online_cpu(cpu) {
 		const struct percpu_data *my_data = per_cpu_ptr(&data, cpu);
-
-		++n;
 
 		/*
 		 * compute the average of the averages. Since the number of samples
@@ -255,33 +269,18 @@ static int __init mod_init(void)
 
 		irqsoff_max = max(irqsoff_max, my_data->irqsoff.max);
 		preempt_max = max(preempt_max, my_data->preempt.max);
-	}
-
-	irqsoff_medians = kmalloc_array(n, sizeof(u64), GFP_KERNEL);
-	if (!irqsoff_medians)
-		return -ENOMEM;
-
-	preempt_medians = kmalloc_array(n, sizeof(u64), GFP_KERNEL);
-	if (!preempt_medians) {
-		kfree(irqsoff_medians);
-		return -ENOMEM;
-	}
-
-	for_each_online_cpu(cpu) {
-		struct percpu_data *my_data;
-
-		my_data = per_cpu_ptr(&data, cpu);
 		irqsoff_medians[i] = my_data->irqsoff.median;
 		preempt_medians[i] = my_data->preempt.median;
 		++i;
 	}
+
 	cpus_read_unlock();
 
-	irqsoff_median = get_median(irqsoff_medians, n);
-	preempt_median = get_median(preempt_medians, n);
+	irqsoff_median = get_median(irqsoff_medians, nr_cpus);
+	preempt_median = get_median(preempt_medians, nr_cpus);
 
-	print_values(irqsoff_medians, n, "irqsoff medians");
-	print_values(preempt_medians, n, "preempt medians");
+	print_values(irqsoff_medians, nr_cpus, "irqsoff medians");
+	print_values(preempt_medians, nr_cpus, "preempt medians");
 
 	pr_info("irqsoff: average=%llu max=%llu median=%llu\n",
 		irqsoff_total / 2, irqsoff_max, irqsoff_median);
