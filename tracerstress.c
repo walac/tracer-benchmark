@@ -36,6 +36,7 @@
 #include <linux/overflow.h>
 #include <linux/sort.h>
 #include <linux/minmax.h>
+#include <linux/cpuhplock.h>
 
 static ulong nr_samples = 0;
 module_param(nr_samples, ulong, 0600);
@@ -237,6 +238,7 @@ static int __init mod_init(void)
 
 	smpboot_unregister_percpu_thread(&sample_thread);
 
+	cpus_read_lock();
 	for_each_online_cpu(cpu) {
 		const struct percpu_data *my_data = per_cpu_ptr(&data, cpu);
 
@@ -273,6 +275,7 @@ static int __init mod_init(void)
 		preempt_medians[i] = my_data->preempt.median;
 		++i;
 	}
+	cpus_read_unlock();
 
 	irqsoff_median = get_median(irqsoff_medians, n);
 	preempt_median = get_median(preempt_medians, n);
