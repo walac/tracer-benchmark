@@ -283,9 +283,9 @@ static int __init mod_init(void)
 	print_values(preempt_medians, nr_cpus, "preempt medians");
 
 	pr_info("irqsoff: average=%llu max=%llu median=%llu\n",
-		irqsoff_total / 2, irqsoff_max, irqsoff_median);
+		irqsoff_total / nr_cpus, irqsoff_max, irqsoff_median);
 	pr_info("preempt: average=%llu max=%llu median=%llu\n",
-		preempt_total / 2, preempt_max, preempt_median);
+		preempt_total / nr_cpus, preempt_max, preempt_median);
 
 	kfree(irqsoff_medians);
 	kfree(preempt_medians);
