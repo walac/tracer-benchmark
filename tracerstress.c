@@ -130,31 +130,22 @@ static void compute_statistics(struct percpu_data *my_data,
 
 static void sample_thread_fn(unsigned int cpu)
 {
-	u64 *irqsoff, *preempt = NULL;
+	u64 *irqsoff __free(kvfree) = NULL;
+	u64 *preempt __free(kvfree) = NULL;
 	struct percpu_data *my_data;
 
 	pr_debug("sample thread starting\n");
 
 	irqsoff = kvmalloc_array(nr_samples, sizeof(u64), GFP_KERNEL);
-	if (!irqsoff)
-		goto out;
-
 	preempt = kvmalloc_array(nr_samples, sizeof(u64), GFP_KERNEL);
-	if (!preempt) {
-		kvfree(irqsoff);
-		goto out;
-	}
+	if (irqsoff && preempt)
+		for (ulong i = 0; i < nr_samples; ++i) {
+			irqsoff[i] = time_diff(local_irq);
+			preempt[i] = time_diff(preempt);
+		}
 
-	for (ulong i = 0; i < nr_samples; ++i) {
-		irqsoff[i] = time_diff(local_irq);
-		preempt[i] = time_diff(preempt);
-	}
-
-out:
 	my_data = get_cpu_ptr(&data);
 	compute_statistics(my_data, irqsoff, preempt);
-	kvfree(irqsoff);
-	kvfree(preempt);
 
 	/*
 	 * Avoid we reenter the function before the main task call kthread_stop
@@ -181,7 +172,8 @@ static int __init mod_init(void)
 {
 	u64 irqsoff_total = 0;
 	u64 preempt_total = 0;
-	u64 *irqsoff_medians, *preempt_medians;
+	u64 *irqsoff_medians __free(kfree) = NULL;
+	u64 *preempt_medians __free(kfree) = NULL;
 	u64 irqsoff_median, preempt_median;
 	u64 irqsoff_max = 0, preempt_max = 0;
 	size_t i, nr_cpus;
@@ -193,56 +185,46 @@ static int __init mod_init(void)
 		return -EINVAL;
 	}
 
-	cpus_read_lock();
-
-	ret = smpboot_register_percpu_thread(&sample_thread);
-	if (ret)
-		return ret;
-
-	/*
-	 * we use the completion here to signal the percpu threads to make
-	 * sure they start the same time
-	 */
-	complete_all(&threads_should_run);
-
-	smpboot_unregister_percpu_thread(&sample_thread);
-
-	nr_cpus = num_online_cpus();
-
-	irqsoff_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
-	if (!irqsoff_medians) {
-		cpus_read_unlock();
-		return -ENOMEM;
-	}
-
-	preempt_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
-	if (!preempt_medians) {
-		kfree(irqsoff_medians);
-		cpus_read_unlock();
-		return -ENOMEM;
-	}
-
-	i = 0;
-	for_each_online_cpu(cpu) {
-		const struct percpu_data *my_data = per_cpu_ptr(&data, cpu);
+	scoped_guard(cpus_read_lock) {
+		ret = smpboot_register_percpu_thread(&sample_thread);
+		if (ret)
+			return ret;
 
 		/*
-		 * compute the average of the averages. Since the number of samples
-		 * is equal for all average, the math works
+		 * we use the completion here to signal the percpu threads to make
+		 * sure they start the same time
 		 */
-		WARN_ON(check_add_overflow(irqsoff_total, my_data->irqsoff.average,
-						     &irqsoff_total));
-		WARN_ON(check_add_overflow(preempt_total, my_data->preempt.average,
-						     &preempt_total));
+		complete_all(&threads_should_run);
 
-		irqsoff_max = max(irqsoff_max, my_data->irqsoff.max);
-		preempt_max = max(preempt_max, my_data->preempt.max);
-		irqsoff_medians[i] = my_data->irqsoff.median;
-		preempt_medians[i] = my_data->preempt.median;
-		++i;
+		smpboot_unregister_percpu_thread(&sample_thread);
+
+		nr_cpus = num_online_cpus();
+
+		irqsoff_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
+		preempt_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
+		if (!irqsoff_medians || !preempt_medians)
+			return -ENOMEM;
+
+		i = 0;
+		for_each_online_cpu(cpu) {
+			const struct percpu_data *my_data = per_cpu_ptr(&data, cpu);
+
+			/*
+			 * compute the average of the averages. Since the number of samples
+			 * is equal for all average, the math works
+			 */
+			WARN_ON(check_add_overflow(irqsoff_total, my_data->irqsoff.average,
+							     &irqsoff_total));
+			WARN_ON(check_add_overflow(preempt_total, my_data->preempt.average,
+							     &preempt_total));
+
+			irqsoff_max = max(irqsoff_max, my_data->irqsoff.max);
+			preempt_max = max(preempt_max, my_data->preempt.max);
+			irqsoff_medians[i] = my_data->irqsoff.median;
+			preempt_medians[i] = my_data->preempt.median;
+			++i;
+		}
 	}
-
-	cpus_read_unlock();
 
 	irqsoff_median = get_median(irqsoff_medians, nr_cpus);
 	preempt_median = get_median(preempt_medians, nr_cpus);
@@ -252,8 +234,6 @@ static int __init mod_init(void)
 	pr_info("preempt: average=%llu max=%llu median=%llu\n",
 		preempt_total / nr_cpus, preempt_max, preempt_median);
 
-	kfree(irqsoff_medians);
-	kfree(preempt_medians);
 	return 0;
 }
 
