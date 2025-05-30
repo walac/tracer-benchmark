@@ -121,11 +121,17 @@ static void compute_statistics(struct percpu_data *my_data,
 	preempt->max		= preempt_data[nr_samples-1];
 }
 
+#define time_diff(call) ({		\
+	const u64 ts = ktime_get_ns();	\
+	call##_disable();		\
+	call##_enable();		\
+	ktime_get_ns() - ts;		\
+})
+
 static void sample_thread_fn(unsigned int cpu)
 {
 	u64 *irqsoff, *preempt = NULL;
 	struct percpu_data *my_data;
-	u64 start, end;
 
 	pr_debug("sample thread starting\n");
 
@@ -140,17 +146,8 @@ static void sample_thread_fn(unsigned int cpu)
 	}
 
 	for (ulong i = 0; i < nr_samples; ++i) {
-		start = ktime_get_ns();
-		local_irq_disable();
-		local_irq_enable();
-		end = ktime_get_ns();
-		irqsoff[i] = end - start;
-
-		start = ktime_get_ns();
-		preempt_disable();
-		preempt_enable();
-		end = ktime_get_ns();
-		preempt[i] = end - start;
+		irqsoff[i] = time_diff(local_irq);
+		preempt[i] = time_diff(preempt);
 	}
 
 out:
