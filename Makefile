@@ -1,1 +1,1 @@
-obj-m += tracerstress.o
+obj-m += tracerbench.o

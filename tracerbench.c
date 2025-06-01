@@ -246,4 +246,4 @@ module_exit(mod_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Wander Lairson Costa");
-MODULE_DESCRIPTION("Stress the irqoffs and preempt tracers");
+MODULE_DESCRIPTION("Benchmark the irqoffs and preempt tracers");
