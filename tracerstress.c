@@ -107,9 +107,9 @@ static void compute_statistics(struct percpu_data *my_data,
 
 	for (ulong i = 0; i < nr_samples; ++i) {
 		WARN_ON(check_add_overflow(irqsoff_total,
-						     irqsoff_data[i], &irqsoff_total));
+					   irqsoff_data[i], &irqsoff_total));
 		WARN_ON(check_add_overflow(preempt_total,
-						     preempt_data[i], &preempt_total));
+					   preempt_data[i], &preempt_total));
 	}
 
 	irqsoff->median		= get_median(irqsoff_data, nr_samples);
@@ -214,9 +214,9 @@ static int __init mod_init(void)
 			 * is equal for all average, the math works
 			 */
 			WARN_ON(check_add_overflow(irqsoff_total, my_data->irqsoff.average,
-							     &irqsoff_total));
+						   &irqsoff_total));
 			WARN_ON(check_add_overflow(preempt_total, my_data->preempt.average,
-							     &preempt_total));
+						   &preempt_total));
 
 			irqsoff_max = max(irqsoff_max, my_data->irqsoff.max);
 			preempt_max = max(preempt_max, my_data->preempt.max);
