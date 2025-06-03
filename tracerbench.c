@@ -100,6 +100,7 @@ static DEFINE_PER_CPU(struct percpu_data, data) = {
 };
 
 static DECLARE_COMPLETION(threads_should_run);
+static DEFINE_MUTEX(buffer_lock);
 static char stat_buffer[256];
 
 static void format_buffer(const struct statistics *irqsoff_stat,
@@ -182,8 +183,6 @@ static struct smp_hotplug_thread sample_thread = {
 	.thread_should_run	= sample_thread_should_run,
 	.thread_comm		= "ktracer/%u",
 };
-
-static DEFINE_MUTEX(buffer_lock);
 
 static int run_benchmark(void)
 {
