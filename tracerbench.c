@@ -183,7 +183,7 @@ static struct smp_hotplug_thread sample_thread = {
 	.thread_comm		= "ktracer/%u",
 };
 
-static DEFINE_MUTEX(lock);
+static DEFINE_MUTEX(buffer_lock);
 
 static int run_benchmark(void)
 {
@@ -241,7 +241,7 @@ static int run_benchmark(void)
 	irqsoff_stat.average	= irqsoff_total / nr_cpus;
 	preempt_stat.average	= preempt_total / nr_cpus;
 
-	guard(mutex)(&lock);
+	guard(mutex)(&buffer_lock);
 	format_buffer(&irqsoff_stat, &preempt_stat);
 
 	return 0;
@@ -274,7 +274,7 @@ static ssize_t my_dbgfs_write(struct file *file, const char __user *buffer,
 static ssize_t mydbgfs_read(struct file *file, char __user *buffer,
 			    size_t count, loff_t *ppos)
 {
-	guard(mutex)(&lock);
+	guard(mutex)(&buffer_lock);
 	return simple_read_from_buffer(buffer, count, ppos,stat_buffer,
 				       strlen(stat_buffer));
 }
