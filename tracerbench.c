@@ -42,6 +42,7 @@
 #include <linux/mutex.h>
 
 static unsigned long nr_samples = 0;
+static unsigned long nr_highest = 100;
 
 struct statistics {
 	u64 median;
@@ -285,10 +286,12 @@ const struct file_operations dbgfs_fops = {
 	.open	= simple_open,
 };
 
-static struct dentry *dbgfs_file;
+static struct dentry *rootdir;
 
 static int __init mod_init(void)
 {
+	struct dentry *file;
+
 	static const struct statistics stat = {
 		.average	= 0,
 		.max		= 0,
@@ -297,16 +300,26 @@ static int __init mod_init(void)
 
 	format_buffer(&stat, &stat);
 
-	dbgfs_file = debugfs_create_file("tracerbench", 0644, NULL, NULL, &dbgfs_fops);
-	if (IS_ERR(dbgfs_file))
-		return PTR_ERR(dbgfs_file);
+	rootdir = debugfs_create_dir(KBUILD_MODNAME, NULL);
+	if (IS_ERR(rootdir))
+		return PTR_ERR(rootdir);
+
+	file = debugfs_create_file("benchmark", 0644, rootdir, NULL, &dbgfs_fops);
+	if (IS_ERR(file))
+		goto err;
+
+	debugfs_create_ulong("nr_average_highest", 0644, rootdir, &nr_highest);
 
 	return 0;
+
+err:
+	debugfs_remove_recursive(rootdir);
+	return PTR_ERR(file);
 }
 
 static void __exit mod_exit(void)
 {
-	debugfs_remove(dbgfs_file);
+	debugfs_remove_recursive(rootdir);
 }
 
 module_init(mod_init);
