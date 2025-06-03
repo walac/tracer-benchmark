@@ -77,7 +77,8 @@ static int cmp(const void *a, const void *b)
 	const u64 x = *(const u64 *) a;
 	const u64 y = *(const u64 *) b;
 
-	return x < y ? -1 : x > y ? 1 : 0;
+	// descending order
+	return x > y ? -1 : x < y ? 1 : 0;
 }
 
 static u64 get_median(u64 *p, size_t n)
@@ -127,11 +128,11 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
 
 	irqsoff->median		= get_median(irqsoff_data, n);
 	irqsoff->average	= irqsoff_total / n;
-	irqsoff->max		= irqsoff_data[n-1];
+	irqsoff->max		= *irqsoff_data;
 
 	preempt->median		= get_median(preempt_data, n);
 	preempt->average	= preempt_total / n;
-	preempt->max		= preempt_data[n-1];
+	preempt->max		= *preempt_data;
 }
 
 #define time_diff(call) ({		\
