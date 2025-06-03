@@ -37,10 +37,11 @@
 #include <linux/sort.h>
 #include <linux/minmax.h>
 #include <linux/cpuhplock.h>
+#include <linux/kstrtox.h>
+#include <linux/debugfs.h>
+#include <linux/mutex.h>
 
-static ulong nr_samples = 0;
-module_param(nr_samples, ulong, 0600);
-MODULE_PARM_DESC(nr_samples, "Number of total samples");
+static unsigned long nr_samples = 0;
 
 struct statistics {
 	u64 median;
@@ -97,28 +98,39 @@ static DEFINE_PER_CPU(struct percpu_data, data) = {
 };
 
 static DECLARE_COMPLETION(threads_should_run);
+static char stat_buffer[256];
 
-static void compute_statistics(struct percpu_data *my_data,
-			       u64 *irqsoff_data, u64 *preempt_data)
+static void format_buffer(const struct statistics *irqsoff_stat,
+			  const struct statistics *preempt_stat)
+{
+	snprintf(stat_buffer, sizeof(stat_buffer),
+		 "irqsoff: average=%llu max=%llu median=%llu\n"
+		 "preempt: average=%llu max=%llu mdiean=%llu\n",
+		 irqsoff_stat->average, irqsoff_stat->max, irqsoff_stat->median,
+		 preempt_stat->average, preempt_stat->max, preempt_stat->median);
+}
+
+static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
+			       u64 *preempt_data, unsigned long n)
 {
 	struct statistics *irqsoff = &my_data->irqsoff;
 	struct statistics *preempt = &my_data->preempt;
 	u64 irqsoff_total = 0, preempt_total = 0;
 
-	for (ulong i = 0; i < nr_samples; ++i) {
+	for (unsigned long i = 0; i < n; ++i) {
 		WARN_ON(check_add_overflow(irqsoff_total,
 					   irqsoff_data[i], &irqsoff_total));
 		WARN_ON(check_add_overflow(preempt_total,
 					   preempt_data[i], &preempt_total));
 	}
 
-	irqsoff->median		= get_median(irqsoff_data, nr_samples);
-	irqsoff->average	= irqsoff_total / nr_samples;
-	irqsoff->max		= irqsoff_data[nr_samples-1];
+	irqsoff->median		= get_median(irqsoff_data, n);
+	irqsoff->average	= irqsoff_total / n;
+	irqsoff->max		= irqsoff_data[n-1];
 
-	preempt->median		= get_median(preempt_data, nr_samples);
-	preempt->average	= preempt_total / nr_samples;
-	preempt->max		= preempt_data[nr_samples-1];
+	preempt->median		= get_median(preempt_data, n);
+	preempt->average	= preempt_total / n;
+	preempt->max		= preempt_data[n-1];
 }
 
 #define time_diff(call) ({		\
@@ -133,19 +145,20 @@ static void sample_thread_fn(unsigned int cpu)
 	u64 *irqsoff __free(kvfree) = NULL;
 	u64 *preempt __free(kvfree) = NULL;
 	struct percpu_data *my_data;
+	const unsigned long n = READ_ONCE(nr_samples);
 
 	pr_debug("sample thread starting\n");
 
-	irqsoff = kvmalloc_array(nr_samples, sizeof(u64), GFP_KERNEL);
-	preempt = kvmalloc_array(nr_samples, sizeof(u64), GFP_KERNEL);
+	irqsoff = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
+	preempt = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
 	if (irqsoff && preempt)
-		for (ulong i = 0; i < nr_samples; ++i) {
+		for (unsigned long i = 0; i < n; ++i) {
 			irqsoff[i] = time_diff(local_irq);
 			preempt[i] = time_diff(preempt);
 		}
 
 	my_data = get_cpu_ptr(&data);
-	compute_statistics(my_data, irqsoff, preempt);
+	compute_statistics(my_data, irqsoff, preempt, n);
 
 	/*
 	 * Avoid we reenter the function before the main task call kthread_stop
@@ -168,22 +181,17 @@ static struct smp_hotplug_thread sample_thread = {
 	.thread_comm		= "ktracer/%u",
 };
 
-static int __init mod_init(void)
+static DEFINE_MUTEX(lock);
+
+static int run_benchmark(void)
 {
-	u64 irqsoff_total = 0;
-	u64 preempt_total = 0;
 	u64 *irqsoff_medians __free(kfree) = NULL;
 	u64 *preempt_medians __free(kfree) = NULL;
-	u64 irqsoff_median, preempt_median;
-	u64 irqsoff_max = 0, preempt_max = 0;
+	struct statistics irqsoff_stat, preempt_stat;
 	size_t i, nr_cpus;
 	int ret = 0;
 	unsigned int cpu;
-
-	if (!nr_samples) {
-		pr_err_once("nr_samples module parameter not set\n");
-		return -EINVAL;
-	}
+	u64 irqsoff_total = 0, preempt_total = 0;
 
 	scoped_guard(cpus_read_lock) {
 		ret = smpboot_register_percpu_thread(&sample_thread);
@@ -218,27 +226,87 @@ static int __init mod_init(void)
 			WARN_ON(check_add_overflow(preempt_total, my_data->preempt.average,
 						   &preempt_total));
 
-			irqsoff_max = max(irqsoff_max, my_data->irqsoff.max);
-			preempt_max = max(preempt_max, my_data->preempt.max);
+			irqsoff_stat.max = max(irqsoff_stat.max, my_data->irqsoff.max);
+			preempt_stat.max = max(preempt_stat.max, my_data->preempt.max);
 			irqsoff_medians[i] = my_data->irqsoff.median;
 			preempt_medians[i] = my_data->preempt.median;
 			++i;
 		}
 	}
 
-	irqsoff_median = get_median(irqsoff_medians, nr_cpus);
-	preempt_median = get_median(preempt_medians, nr_cpus);
+	irqsoff_stat.median	= get_median(irqsoff_medians, nr_cpus);
+	preempt_stat.median	= get_median(preempt_medians, nr_cpus);
+	irqsoff_stat.average	= irqsoff_total / nr_cpus;
+	preempt_stat.average	= preempt_total / nr_cpus;
 
-	pr_info("irqsoff: average=%llu max=%llu median=%llu\n",
-		irqsoff_total / nr_cpus, irqsoff_max, irqsoff_median);
-	pr_info("preempt: average=%llu max=%llu median=%llu\n",
-		preempt_total / nr_cpus, preempt_max, preempt_median);
+	guard(mutex)(&lock);
+	format_buffer(&irqsoff_stat, &preempt_stat);
+
+	return 0;
+}
+
+static ssize_t my_dbgfs_write(struct file *file, const char __user *buffer,
+			      size_t count, loff_t *ppos)
+{
+	int ret;
+	unsigned long res;
+
+	ret = kstrtoul_from_user(buffer, count, 0, &res);
+	if (ret)
+		return ret;
+
+	if (!res) {
+		pr_err_once("Number of samples cannot be zero\n");
+		return -EINVAL;
+	}
+
+	WRITE_ONCE(nr_samples, res);
+
+	ret = run_benchmark();
+	if (ret)
+		return ret;
+
+	return count;
+}
+
+static ssize_t mydbgfs_read(struct file *file, char __user *buffer,
+			    size_t count, loff_t *ppos)
+{
+	guard(mutex)(&lock);
+	return simple_read_from_buffer(buffer, count, ppos,stat_buffer,
+				       strlen(stat_buffer));
+}
+
+const struct file_operations dbgfs_fops = {
+	.owner	= THIS_MODULE,
+	.write	= my_dbgfs_write,
+	.read	= mydbgfs_read,
+	.llseek = default_llseek,
+	.open	= simple_open,
+};
+
+static struct dentry *dbgfs_file;
+
+static int __init mod_init(void)
+{
+	static const struct statistics stat = {
+		.average	= 0,
+		.max		= 0,
+		.median		= 0,
+	};
+
+	format_buffer(&stat, &stat);
+
+	dbgfs_file = debugfs_create_file("tracerbench", 0644, NULL, NULL, &dbgfs_fops);
+	if (IS_ERR(dbgfs_file))
+		return PTR_ERR(dbgfs_file);
 
 	return 0;
 }
 
 static void __exit mod_exit(void)
 {
+	debugfs_remove(dbgfs_file);
 }
 
 module_init(mod_init);
