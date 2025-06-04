@@ -324,7 +324,7 @@ static int run_benchmark(void)
 	return 0;
 }
 
-static ssize_t my_dbgfs_write(struct file *file, const char __user *buffer,
+static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 			      size_t count, loff_t *ppos)
 {
 	int ret;
@@ -348,7 +348,7 @@ static ssize_t my_dbgfs_write(struct file *file, const char __user *buffer,
 	return ret ? : count;
 }
 
-static ssize_t mydbgfs_read(struct file *file, char __user *buffer,
+static ssize_t benchmark_read(struct file *file, char __user *buffer,
 			    size_t count, loff_t *ppos)
 {
 	guard(mutex)(&buffer_lock);
@@ -356,10 +356,10 @@ static ssize_t mydbgfs_read(struct file *file, char __user *buffer,
 				       strlen(stat_buffer));
 }
 
-const struct file_operations dbgfs_fops = {
+const struct file_operations benchmark_fops = {
 	.owner	= THIS_MODULE,
-	.write	= my_dbgfs_write,
-	.read	= mydbgfs_read,
+	.write	= benchmark_write,
+	.read	= benchmark_read,
 	.llseek = default_llseek,
 	.open	= simple_open,
 };
@@ -378,7 +378,7 @@ static int __init mod_init(void)
 	if (IS_ERR(rootdir))
 		return PTR_ERR(rootdir);
 
-	file = debugfs_create_file("benchmark", 0644, rootdir, NULL, &dbgfs_fops);
+	file = debugfs_create_file("benchmark", 0644, rootdir, NULL, &benchmark_fops);
 	if (IS_ERR(file))
 		goto err;
 
