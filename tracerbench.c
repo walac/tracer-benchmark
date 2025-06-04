@@ -42,9 +42,9 @@
 #include <linux/mutex.h>
 #include <linux/min_heap.h>
 
-static unsigned long nr_samples = 0;
-static unsigned long nr_highest = 100;
-static unsigned long cached_nr_highest;
+static size_t nr_samples = 0;
+static size_t nr_highest = 100;
+static size_t cached_nr_highest;
 
 struct statistics {
 	u64 median;
@@ -102,9 +102,9 @@ static const struct min_heap_callbacks cbs = {
 	.swp	= min_heap_swp,
 };
 
-static void add_samples(struct u64_min_heap *h, const u64 *samples, unsigned long n)
+static void add_samples(struct u64_min_heap *h, const u64 *samples, size_t n)
 {
-	for (unsigned long i = 0; i < n; ++i) {
+	for (size_t i = 0; i < n; ++i) {
 		min_heap_push_inline(h, &samples[i], &cbs, NULL);
 		if (min_heap_full_inline(h))
 			min_heap_pop_inline(h, &cbs, NULL);
@@ -153,7 +153,7 @@ static int init_heaps(void)
 	 * one extra space to make it easier to compute when
 	 * the heap is full
 	 */
-	const unsigned long n = cached_nr_highest + 1;
+	const size_t n = cached_nr_highest + 1;
 	void *p1 __free(kvfree) = NULL;
 	void *p2 __free(kvfree) = NULL;
 
@@ -179,13 +179,13 @@ static void format_buffer(const struct statistics *irqsoff_stat,
 }
 
 static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
-			       u64 *preempt_data, unsigned long n)
+			       u64 *preempt_data, size_t n)
 {
 	struct statistics *irqsoff = &my_data->irqsoff;
 	struct statistics *preempt = &my_data->preempt;
 	u64 irqsoff_total = 0, preempt_total = 0;
 
-	for (unsigned long i = 0; i < n; ++i) {
+	for (size_t i = 0; i < n; ++i) {
 		WARN_ON(check_add_overflow(irqsoff_total, irqsoff_data[i], &irqsoff_total));
 		WARN_ON(check_add_overflow(preempt_total, preempt_data[i], &preempt_total));
 	}
@@ -211,15 +211,15 @@ static void sample_thread_fn(unsigned int cpu)
 	u64 *irqsoff __free(kvfree) = NULL;
 	u64 *preempt __free(kvfree) = NULL;
 	struct percpu_data *my_data;
-	const unsigned long n = READ_ONCE(nr_samples);
-	const unsigned long nh = READ_ONCE(cached_nr_highest);
+	const size_t n = READ_ONCE(nr_samples);
+	const size_t nh = READ_ONCE(cached_nr_highest);
 
 	pr_debug("sample thread starting\n");
 
 	irqsoff = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
 	preempt = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
 	if (irqsoff && preempt)
-		for (unsigned long i = 0; i < n; ++i) {
+		for (size_t i = 0; i < n; ++i) {
 			irqsoff[i] = time_diff(local_irq);
 			preempt[i] = time_diff(preempt);
 		}
@@ -387,7 +387,7 @@ static int __init mod_init(void)
 	if (IS_ERR(file))
 		goto err;
 
-	debugfs_create_ulong("nr_max_avg", 0644, rootdir, &nr_highest);
+	debugfs_create_size_t("nr_max_avg", 0644, rootdir, &nr_highest);
 
 	return 0;
 
