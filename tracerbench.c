@@ -387,7 +387,7 @@ static int __init mod_init(void)
 	if (IS_ERR(file))
 		goto err;
 
-	debugfs_create_size_t("nr_max_avg", 0644, rootdir, &nr_highest);
+	debugfs_create_size_t("nr_highest", 0644, rootdir, &nr_highest);
 
 	return 0;
 
