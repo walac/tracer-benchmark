@@ -121,11 +121,14 @@ static u64 compute_heap_average(struct u64_min_heap *h)
 	return total / h->nr;
 }
 
-static u64 median(u64 *p, size_t n)
+static u64 median_and_max(u64 *p, size_t n, u64 *max_val)
 {
 	const size_t pos = n / 2;
 
 	sort(p, n, sizeof(u64), u64_descending_cmp, u64_swp);
+
+	if (max_val)
+		*max_val = p[0];
 
 	if (n % 2)
 		return p[pos];
@@ -190,13 +193,11 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
 		WARN_ON(check_add_overflow(preempt_total, preempt_data[i], &preempt_total));
 	}
 
-	irqsoff->median		= median(irqsoff_data, n);
+	irqsoff->median		= median_and_max(irqsoff_data, n, &irqsoff->max);
 	irqsoff->average	= irqsoff_total / n;
-	irqsoff->max		= *irqsoff_data;
 
-	preempt->median		= median(preempt_data, n);
+	preempt->median		= median_and_max(preempt_data, n, &preempt->max);
 	preempt->average	= preempt_total / n;
-	preempt->max		= *preempt_data;
 }
 
 #define time_diff(call) ({		\
@@ -310,11 +311,11 @@ static int run_benchmark(void)
 		}
 	}
 
-	irqsoff_stat.median	= median(irqsoff_medians, nr_cpus);
+	irqsoff_stat.median	= median_and_max(irqsoff_medians, nr_cpus, NULL);
 	irqsoff_stat.average	= irqsoff_total / nr_cpus;
 	irqsoff_stat.max_avg	= compute_heap_average(&irqsoff_heap);
 
-	preempt_stat.median	= median(preempt_medians, nr_cpus);
+	preempt_stat.median	= median_and_max(preempt_medians, nr_cpus, NULL);
 	preempt_stat.average	= preempt_total / nr_cpus;
 	preempt_stat.max_avg	= compute_heap_average(&preempt_heap);
 
