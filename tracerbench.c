@@ -207,6 +207,14 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
 	ktime_get_ns() - ts;		\
 })
 
+static void collect_data(u64 *irqsoff, u64 *preempt, size_t n)
+{
+	for (size_t i = 0; i < n; ++i) {
+		irqsoff[i] = time_diff(local_irq);
+		preempt[i] = time_diff(preempt);
+	}
+}
+
 static void sample_thread_fn(unsigned int cpu)
 {
 	u64 *irqsoff __free(kvfree) = NULL;
@@ -220,10 +228,7 @@ static void sample_thread_fn(unsigned int cpu)
 	irqsoff = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
 	preempt = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
 	if (irqsoff && preempt)
-		for (size_t i = 0; i < n; ++i) {
-			irqsoff[i] = time_diff(local_irq);
-			preempt[i] = time_diff(preempt);
-		}
+		collect_data(irqsoff, preempt, n);
 
 	my_data = get_cpu_ptr(&data);
 	compute_statistics(my_data, irqsoff, preempt, n);
