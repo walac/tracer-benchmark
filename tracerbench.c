@@ -76,7 +76,7 @@ static void u64_swp(void *a, void *b, int size)
 	*y = tmp;
 }
 
-static int u64_cmp(const void *a, const void *b)
+static int u64_descending_cmp(const void *a, const void *b)
 {
 	const u64 x = *(const u64 *) a;
 	const u64 y = *(const u64 *) b;
@@ -89,7 +89,7 @@ DEFINE_MIN_HEAP(u64, u64_min_heap);
 
 static bool min_heap_less(const void *lhs, const void *rhs, void *args)
 {
-	return u64_cmp(lhs, rhs) > 0;
+	return u64_descending_cmp(lhs, rhs) > 0;
 }
 
 static void min_heap_swp(void *lhs, void *rhs, void *args)
@@ -125,7 +125,7 @@ static u64 get_median(u64 *p, size_t n)
 {
 	const size_t pos = n / 2;
 
-	sort(p, n, sizeof(u64), u64_cmp, u64_swp);
+	sort(p, n, sizeof(u64), u64_descending_cmp, u64_swp);
 
 	if (n % 2)
 		return p[pos];
