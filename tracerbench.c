@@ -42,7 +42,7 @@
 #include <linux/mutex.h>
 #include <linux/min_heap.h>
 
-static size_t nr_samples = 0;
+static size_t nr_samples = 10000;
 static size_t nr_highest = 100;
 static size_t cached_nr_highest;
 
@@ -328,19 +328,14 @@ static ssize_t my_dbgfs_write(struct file *file, const char __user *buffer,
 			      size_t count, loff_t *ppos)
 {
 	int ret;
-	unsigned long res;
+	const size_t n = READ_ONCE(nr_samples);
 
-	ret = kstrtoul_from_user(buffer, count, 0, &res);
-	if (ret)
-		return ret;
-
-	if (!res) {
+	if (!n) {
 		pr_err_once("Number of samples cannot be zero\n");
 		return -EINVAL;
 	}
 
-	WRITE_ONCE(nr_samples, res);
-	WRITE_ONCE(cached_nr_highest, min(nr_samples, READ_ONCE(nr_highest)));
+	WRITE_ONCE(cached_nr_highest, min(n, READ_ONCE(nr_highest)));
 
 	ret = init_heaps();
 	if (ret)
@@ -388,6 +383,7 @@ static int __init mod_init(void)
 		goto err;
 
 	debugfs_create_size_t("nr_highest", 0644, rootdir, &nr_highest);
+	debugfs_create_size_t("nr_samples", 0644, rootdir, &nr_samples);
 
 	return 0;
 
