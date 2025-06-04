@@ -40,20 +40,24 @@
 #include <linux/kstrtox.h>
 #include <linux/debugfs.h>
 #include <linux/mutex.h>
+#include <linux/min_heap.h>
 
 static unsigned long nr_samples = 0;
 static unsigned long nr_highest = 100;
+static unsigned long cached_nr_highest;
 
 struct statistics {
 	u64 median;
 	u64 average;
 	u64 max;
+	u64 max_avg;
 };
 
 #define STATISTICS_INITIALIZER {	\
 	.median		= 0,		\
 	.average	= 0,		\
 	.max		= 0,		\
+	.max_avg	= 0,		\
 }
 
 struct percpu_data {
@@ -62,7 +66,7 @@ struct percpu_data {
 	bool should_run;
 };
 
-static void swp(void *a, void *b, int size)
+static void u64_swp(void *a, void *b, int size)
 {
 	u64 tmp;
 	u64 *x = a, *y = b;
@@ -72,7 +76,7 @@ static void swp(void *a, void *b, int size)
 	*y = tmp;
 }
 
-static int cmp(const void *a, const void *b)
+static int u64_cmp(const void *a, const void *b)
 {
 	const u64 x = *(const u64 *) a;
 	const u64 y = *(const u64 *) b;
@@ -81,11 +85,47 @@ static int cmp(const void *a, const void *b)
 	return x > y ? -1 : x < y ? 1 : 0;
 }
 
+DEFINE_MIN_HEAP(u64, u64_min_heap);
+
+static bool min_heap_less(const void *lhs, const void *rhs, void *args)
+{
+	return u64_cmp(lhs, rhs) > 0;
+}
+
+static void min_heap_swp(void *lhs, void *rhs, void *args)
+{
+	u64_swp(lhs, rhs, sizeof(u64));
+}
+
+static const struct min_heap_callbacks cbs = {
+	.less	= min_heap_less,
+	.swp	= min_heap_swp,
+};
+
+static void add_samples(struct u64_min_heap *h, const u64 *samples, unsigned long n)
+{
+	for (unsigned long i = 0; i < n; ++i) {
+		min_heap_push_inline(h, &samples[i], &cbs, NULL);
+		if (min_heap_full_inline(h))
+			min_heap_pop_inline(h, &cbs, NULL);
+	}
+}
+
+static u64 compute_heap_average(struct u64_min_heap *h)
+{
+	u64 total = 0;
+
+	for (size_t i = 0; i < h->nr; ++i)
+		WARN_ON(check_add_overflow(total, h->data[i], &total));
+
+	return total / h->nr;
+}
+
 static u64 get_median(u64 *p, size_t n)
 {
 	const size_t pos = n / 2;
 
-	sort(p, n, sizeof(u64), cmp, swp);
+	sort(p, n, sizeof(u64), u64_cmp, u64_swp);
 
 	if (n % 2)
 		return p[pos];
@@ -103,14 +143,39 @@ static DECLARE_COMPLETION(threads_should_run);
 static DEFINE_MUTEX(buffer_lock);
 static char stat_buffer[256];
 
+static DEFINE_MUTEX(heap_lock);
+static struct u64_min_heap irqsoff_heap;
+static struct u64_min_heap preempt_heap;
+
+static int init_heaps(void)
+{
+	/*
+	 * one extra space to make it easier to compute when
+	 * the heap is full
+	 */
+	const unsigned long n = cached_nr_highest + 1;
+	void *p1 __free(kvfree) = NULL;
+	void *p2 __free(kvfree) = NULL;
+
+	p1 = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
+	p2 = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
+	if (!p1 || !p2)
+		return -ENOMEM;
+
+	min_heap_init_inline(&irqsoff_heap, no_free_ptr(p1), n);
+	min_heap_init_inline(&preempt_heap, no_free_ptr(p2), n);
+	return 0;
+}
+
 static void format_buffer(const struct statistics *irqsoff_stat,
 			  const struct statistics *preempt_stat)
 {
 	snprintf(stat_buffer, sizeof(stat_buffer),
-		 "irqsoff: average=%llu max=%llu median=%llu\n"
-		 "preempt: average=%llu max=%llu median=%llu\n",
-		 irqsoff_stat->average, irqsoff_stat->max, irqsoff_stat->median,
-		 preempt_stat->average, preempt_stat->max, preempt_stat->median);
+		 "irqsoff: average=%llu avg_max=%llu max=%llu median=%llu\n"
+		 "preempt: average=%llu avg_max=%llu max=%llu median=%llu\n",
+		 irqsoff_stat->average, irqsoff_stat->max_avg, irqsoff_stat->max,
+		 irqsoff_stat->median, preempt_stat->average, preempt_stat->max_avg,
+		 preempt_stat->max, preempt_stat->median);
 }
 
 static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
@@ -121,10 +186,8 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
 	u64 irqsoff_total = 0, preempt_total = 0;
 
 	for (unsigned long i = 0; i < n; ++i) {
-		WARN_ON(check_add_overflow(irqsoff_total,
-					   irqsoff_data[i], &irqsoff_total));
-		WARN_ON(check_add_overflow(preempt_total,
-					   preempt_data[i], &preempt_total));
+		WARN_ON(check_add_overflow(irqsoff_total, irqsoff_data[i], &irqsoff_total));
+		WARN_ON(check_add_overflow(preempt_total, preempt_data[i], &preempt_total));
 	}
 
 	irqsoff->median		= get_median(irqsoff_data, n);
@@ -149,6 +212,7 @@ static void sample_thread_fn(unsigned int cpu)
 	u64 *preempt __free(kvfree) = NULL;
 	struct percpu_data *my_data;
 	const unsigned long n = READ_ONCE(nr_samples);
+	const unsigned long nh = READ_ONCE(cached_nr_highest);
 
 	pr_debug("sample thread starting\n");
 
@@ -168,6 +232,10 @@ static void sample_thread_fn(unsigned int cpu)
 	 */
 	my_data->should_run = false;
 	put_cpu_ptr(&data);
+
+	guard(mutex)(&heap_lock);
+	add_samples(&irqsoff_heap, irqsoff, nh);
+	add_samples(&preempt_heap, preempt, nh);
 }
 
 static int sample_thread_should_run(unsigned int cpu)
@@ -233,18 +301,22 @@ static int run_benchmark(void)
 			WARN_ON(check_add_overflow(preempt_total, my_data->preempt.average,
 						   &preempt_total));
 
-			irqsoff_stat.max = max(irqsoff_stat.max, my_data->irqsoff.max);
-			preempt_stat.max = max(preempt_stat.max, my_data->preempt.max);
-			irqsoff_medians[i] = my_data->irqsoff.median;
-			preempt_medians[i] = my_data->preempt.median;
+			irqsoff_stat.max	= max(irqsoff_stat.max, my_data->irqsoff.max);
+			irqsoff_medians[i]	= my_data->irqsoff.median;
+
+			preempt_stat.max	= max(preempt_stat.max, my_data->preempt.max);
+			preempt_medians[i]	= my_data->preempt.median;
 			++i;
 		}
 	}
 
 	irqsoff_stat.median	= get_median(irqsoff_medians, nr_cpus);
-	preempt_stat.median	= get_median(preempt_medians, nr_cpus);
 	irqsoff_stat.average	= irqsoff_total / nr_cpus;
+	irqsoff_stat.max_avg	= compute_heap_average(&irqsoff_heap);
+
+	preempt_stat.median	= get_median(preempt_medians, nr_cpus);
 	preempt_stat.average	= preempt_total / nr_cpus;
+	preempt_stat.max_avg	= compute_heap_average(&preempt_heap);
 
 	guard(mutex)(&buffer_lock);
 	format_buffer(&irqsoff_stat, &preempt_stat);
@@ -268,19 +340,24 @@ static ssize_t my_dbgfs_write(struct file *file, const char __user *buffer,
 	}
 
 	WRITE_ONCE(nr_samples, res);
+	WRITE_ONCE(cached_nr_highest, min(nr_samples, READ_ONCE(nr_highest)));
 
-	ret = run_benchmark();
+	ret = init_heaps();
 	if (ret)
 		return ret;
 
-	return count;
+	ret = run_benchmark();
+	kvfree(irqsoff_heap.data);
+	kvfree(preempt_heap.data);
+
+	return ret ? : count;
 }
 
 static ssize_t mydbgfs_read(struct file *file, char __user *buffer,
 			    size_t count, loff_t *ppos)
 {
 	guard(mutex)(&buffer_lock);
-	return simple_read_from_buffer(buffer, count, ppos,stat_buffer,
+	return simple_read_from_buffer(buffer, count, ppos, stat_buffer,
 				       strlen(stat_buffer));
 }
 
@@ -298,11 +375,7 @@ static int __init mod_init(void)
 {
 	struct dentry *file;
 
-	static const struct statistics stat = {
-		.average	= 0,
-		.max		= 0,
-		.median		= 0,
-	};
+	static const struct statistics stat = STATISTICS_INITIALIZER;
 
 	format_buffer(&stat, &stat);
 
@@ -314,7 +387,7 @@ static int __init mod_init(void)
 	if (IS_ERR(file))
 		goto err;
 
-	debugfs_create_ulong("nr_average_highest", 0644, rootdir, &nr_highest);
+	debugfs_create_ulong("nr_max_avg", 0644, rootdir, &nr_highest);
 
 	return 0;
 
