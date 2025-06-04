@@ -108,7 +108,7 @@ static void format_buffer(const struct statistics *irqsoff_stat,
 {
 	snprintf(stat_buffer, sizeof(stat_buffer),
 		 "irqsoff: average=%llu max=%llu median=%llu\n"
-		 "preempt: average=%llu max=%llu mdiean=%llu\n",
+		 "preempt: average=%llu max=%llu median=%llu\n",
 		 irqsoff_stat->average, irqsoff_stat->max, irqsoff_stat->median,
 		 preempt_stat->average, preempt_stat->max, preempt_stat->median);
 }
