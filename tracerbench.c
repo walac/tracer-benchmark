@@ -175,12 +175,18 @@ static int sample_thread_should_run(unsigned int cpu)
 	return this_cpu_ptr(&data)->should_run;
 }
 
+static void sample_thread_cleanup(unsigned int cpu, bool online)
+{
+	this_cpu_ptr(&data)->should_run = true;
+}
+
 static DEFINE_PER_CPU(struct task_struct *, ktracer);
 
 static struct smp_hotplug_thread sample_thread = {
 	.store			= &ktracer,
 	.thread_fn		= sample_thread_fn,
 	.thread_should_run	= sample_thread_should_run,
+	.cleanup		= sample_thread_cleanup,
 	.thread_comm		= "ktracer/%u",
 };
 
