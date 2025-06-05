@@ -46,6 +46,8 @@ static size_t nr_samples = 10000;
 static size_t nr_highest = 100;
 static size_t cached_nr_highest;
 
+DEFINE_MIN_HEAP(u64, u64_min_heap);
+
 struct statistics {
 	u64 median;
 	u64 average;
@@ -71,6 +73,20 @@ struct debugfs_entry {
 	void *value;
 };
 
+static DEFINE_PER_CPU(struct percpu_data, data) = {
+	.irqsoff	= STATISTICS_INITIALIZER,
+	.preempt	= STATISTICS_INITIALIZER,
+	.should_run	= true,
+};
+
+static DECLARE_COMPLETION(threads_should_run);
+static DEFINE_MUTEX(buffer_lock);
+static char stat_buffer[256];
+
+static DEFINE_MUTEX(heap_lock);
+static struct u64_min_heap irqsoff_heap;
+static struct u64_min_heap preempt_heap;
+
 static const struct debugfs_entry configs[] = {
 	{"nr_samples", &nr_samples},
 	{"nr_highest", &nr_highest},
@@ -94,8 +110,6 @@ static int u64_descending_cmp(const void *a, const void *b)
 	// descending order
 	return x > y ? -1 : x < y ? 1 : 0;
 }
-
-DEFINE_MIN_HEAP(u64, u64_min_heap);
 
 static bool min_heap_less(const void *lhs, const void *rhs, void *args)
 {
@@ -145,20 +159,6 @@ static u64 median_and_max(u64 *p, size_t n, u64 *max_val)
 
 	return (p[pos] + p[pos-1]) / 2;
 }
-
-static DEFINE_PER_CPU(struct percpu_data, data) = {
-	.irqsoff	= STATISTICS_INITIALIZER,
-	.preempt	= STATISTICS_INITIALIZER,
-	.should_run	= true,
-};
-
-static DECLARE_COMPLETION(threads_should_run);
-static DEFINE_MUTEX(buffer_lock);
-static char stat_buffer[256];
-
-static DEFINE_MUTEX(heap_lock);
-static struct u64_min_heap irqsoff_heap;
-static struct u64_min_heap preempt_heap;
 
 static int init_heaps(void)
 {
