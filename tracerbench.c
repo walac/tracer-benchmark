@@ -278,8 +278,10 @@ static void sample_thread_fn(unsigned int cpu)
 
 	irqsoff = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
 	preempt = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
-	if (irqsoff && preempt)
+	if (irqsoff && preempt) {
+		wait_for_completion(&threads_should_run);
 		collect_data(irqsoff, preempt, n);
+	}
 
 	my_data = get_cpu_ptr(&data);
 	compute_statistics(my_data, irqsoff, preempt, n);
@@ -337,6 +339,8 @@ static int run_benchmark(void)
 		complete_all(&threads_should_run);
 
 		smpboot_unregister_percpu_thread(&sample_thread);
+
+		reinit_completion(&threads_should_run);
 
 		nr_cpus = num_online_cpus();
 
