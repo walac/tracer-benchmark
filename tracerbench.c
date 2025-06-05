@@ -55,6 +55,8 @@ struct statistics {
 	u64 max_avg;
 };
 
+#define NR_STATISTICS (sizeof(struct statistics)/sizeof(u64))
+
 #define STATISTICS_INITIALIZER {	\
 	.median		= 0,		\
 	.average	= 0,		\
@@ -69,8 +71,13 @@ struct percpu_data {
 };
 
 struct debugfs_entry {
-	char *filename;
+	const char *filename;
 	void *value;
+};
+
+struct debugfs_results {
+	const char *subdir;
+	struct debugfs_entry values[NR_STATISTICS];
 };
 
 static DEFINE_PER_CPU(struct percpu_data, data) = {
@@ -80,16 +87,38 @@ static DEFINE_PER_CPU(struct percpu_data, data) = {
 };
 
 static DECLARE_COMPLETION(threads_should_run);
-static DEFINE_MUTEX(buffer_lock);
-static char stat_buffer[256];
-
 static DEFINE_MUTEX(heap_lock);
 static struct u64_min_heap irqsoff_heap;
 static struct u64_min_heap preempt_heap;
 
-static const struct debugfs_entry configs[] = {
-	{"nr_samples", &nr_samples},
-	{"nr_highest", &nr_highest},
+static struct statistics irqsoff_stat = STATISTICS_INITIALIZER;
+static struct statistics preempt_stat = STATISTICS_INITIALIZER;
+
+
+static const struct debugfs_entry __initdata configs[] = {
+	{"nr_samples", &nr_samples	},
+	{"nr_highest", &nr_highest	},
+};
+
+static const struct debugfs_results __initdata debugfs_result_files[] = {
+	{
+		"irqsoff",
+		{
+			{"median", &irqsoff_stat.median		},
+			{"average", &irqsoff_stat.average	},
+			{"max", &irqsoff_stat.max		},
+			{"max_avg", &irqsoff_stat.max_avg	},
+		},
+	},
+	{
+		"preempt",
+		{
+			{"median", &preempt_stat.median		},
+			{"average", &preempt_stat.average	},
+			{"max", &preempt_stat.max		},
+			{"max_avg", &preempt_stat.max_avg	},
+		},
+	},
 };
 
 static void u64_swp(void *a, void *b, int size)
@@ -180,17 +209,6 @@ static int init_heaps(void)
 	return 0;
 }
 
-static void format_buffer(const struct statistics *irqsoff_stat,
-			  const struct statistics *preempt_stat)
-{
-	snprintf(stat_buffer, sizeof(stat_buffer),
-		 "irqsoff: average=%llu avg_max=%llu max=%llu median=%llu\n"
-		 "preempt: average=%llu avg_max=%llu max=%llu median=%llu\n",
-		 irqsoff_stat->average, irqsoff_stat->max_avg, irqsoff_stat->max,
-		 irqsoff_stat->median, preempt_stat->average, preempt_stat->max_avg,
-		 preempt_stat->max, preempt_stat->median);
-}
-
 static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
 			       u64 *preempt_data, size_t n)
 {
@@ -278,11 +296,11 @@ static int run_benchmark(void)
 {
 	u64 *irqsoff_medians __free(kfree) = NULL;
 	u64 *preempt_medians __free(kfree) = NULL;
-	struct statistics irqsoff_stat, preempt_stat;
 	size_t i, nr_cpus;
 	int ret = 0;
 	unsigned int cpu;
 	u64 irqsoff_total = 0, preempt_total = 0;
+	u64 irqsoff_max = 0, preempt_max = 0;
 
 	scoped_guard(cpus_read_lock) {
 		ret = smpboot_register_percpu_thread(&sample_thread);
@@ -317,10 +335,10 @@ static int run_benchmark(void)
 			WARN_ON(check_add_overflow(preempt_total, my_data->preempt.average,
 						   &preempt_total));
 
-			irqsoff_stat.max	= max(irqsoff_stat.max, my_data->irqsoff.max);
+			irqsoff_max		= max(irqsoff_max, my_data->irqsoff.max);
 			irqsoff_medians[i]	= my_data->irqsoff.median;
 
-			preempt_stat.max	= max(preempt_stat.max, my_data->preempt.max);
+			preempt_max		= max(preempt_max, my_data->preempt.max);
 			preempt_medians[i]	= my_data->preempt.median;
 			++i;
 		}
@@ -328,14 +346,13 @@ static int run_benchmark(void)
 
 	irqsoff_stat.median	= median_and_max(irqsoff_medians, nr_cpus, NULL);
 	irqsoff_stat.average	= irqsoff_total / nr_cpus;
+	irqsoff_stat.max	= irqsoff_max;
 	irqsoff_stat.max_avg	= compute_heap_average(&irqsoff_heap);
 
 	preempt_stat.median	= median_and_max(preempt_medians, nr_cpus, NULL);
 	preempt_stat.average	= preempt_total / nr_cpus;
+	preempt_stat.max	= preempt_max;
 	preempt_stat.max_avg	= compute_heap_average(&preempt_heap);
-
-	guard(mutex)(&buffer_lock);
-	format_buffer(&irqsoff_stat, &preempt_stat);
 
 	return 0;
 }
@@ -364,27 +381,41 @@ static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 	return ret ? : count;
 }
 
-static ssize_t benchmark_read(struct file *file, char __user *buffer,
-			    size_t count, loff_t *ppos)
-{
-	guard(mutex)(&buffer_lock);
-	return simple_read_from_buffer(buffer, count, ppos, stat_buffer,
-				       strlen(stat_buffer));
-}
-
 const struct file_operations benchmark_fops = {
 	.owner	= THIS_MODULE,
 	.write	= benchmark_write,
-	.read	= benchmark_read,
 	.llseek = default_llseek,
 	.open	= simple_open,
 };
 
-static void create_config_files(struct dentry *parent)
+static void __init create_config_files(struct dentry *parent)
 {
 	for (size_t i = 0; i < ARRAY_SIZE(configs); ++i)
 		debugfs_create_size_t(configs[i].filename, 0644,
 				      parent, configs[i].value);
+}
+
+
+static int __init create_stat_files(struct dentry *parent)
+{
+	static const umode_t mode = 0x444;
+	struct dentry *subdir;
+
+	for (size_t i = 0; i < ARRAY_SIZE(debugfs_result_files); ++i) {
+		const struct debugfs_results *entries = debugfs_result_files + i;
+
+		subdir = debugfs_create_dir(entries->subdir, parent);
+		if (IS_ERR(subdir))
+			return PTR_ERR(subdir);
+
+		for (size_t j = 0; j < ARRAY_SIZE(entries->values); ++j) {
+			const struct debugfs_entry *entry = entries->values + j;
+
+			debugfs_create_u64(entry->filename, mode, subdir, entry->value);
+		}
+	}
+
+	return 0;
 }
 
 static struct dentry *rootdir;
@@ -392,26 +423,31 @@ static struct dentry *rootdir;
 static int __init mod_init(void)
 {
 	struct dentry *file;
+	int ret;
 
-	static const struct statistics stat = STATISTICS_INITIALIZER;
-
-	format_buffer(&stat, &stat);
+	compiletime_assert(sizeof(u64)*NR_STATISTICS == sizeof(struct statistics),
+			   "struct statistics size is not multiple of u64");
 
 	rootdir = debugfs_create_dir(KBUILD_MODNAME, NULL);
 	if (IS_ERR(rootdir))
 		return PTR_ERR(rootdir);
 
-	file = debugfs_create_file("benchmark", 0644, rootdir, NULL, &benchmark_fops);
-	if (IS_ERR(file))
+	file = debugfs_create_file("benchmark", 0200, rootdir, NULL, &benchmark_fops);
+	if (IS_ERR(file)) {
+		ret = PTR_ERR(file);
 		goto err;
+	}
 
 	create_config_files(rootdir);
+	ret = create_stat_files(rootdir);
+	if (ret)
+		goto err;
 
 	return 0;
 
 err:
 	debugfs_remove_recursive(rootdir);
-	return PTR_ERR(file);
+	return ret;
 }
 
 static void __exit mod_exit(void)
