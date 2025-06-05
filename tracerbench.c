@@ -53,6 +53,7 @@ struct statistics {
 	u64 average;
 	u64 max;
 	u64 max_avg;
+	u64 percentile;
 };
 
 #define NR_STATISTICS (sizeof(struct statistics)/sizeof(u64))
@@ -62,6 +63,7 @@ struct statistics {
 	.average	= 0,		\
 	.max		= 0,		\
 	.max_avg	= 0,		\
+	.percentile	= 0,		\
 }
 
 struct percpu_data {
@@ -100,23 +102,25 @@ static const struct debugfs_entry __initdata configs[] = {
 	{"nr_highest", &nr_highest	},
 };
 
-static const struct debugfs_results __initdata debugfs_result_files[] = {
+static const struct debugfs_results debugfs_result_files[] = {
 	{
 		"irqsoff",
 		{
-			{"median", &irqsoff_stat.median		},
-			{"average", &irqsoff_stat.average	},
-			{"max", &irqsoff_stat.max		},
-			{"max_avg", &irqsoff_stat.max_avg	},
+			{"median",	&irqsoff_stat.median	},
+			{"average",	&irqsoff_stat.average	},
+			{"max",		&irqsoff_stat.max	},
+			{"max_avg",	&irqsoff_stat.max_avg	},
+			{"percentile",	&irqsoff_stat.percentile},
 		},
 	},
 	{
 		"preempt",
 		{
-			{"median", &preempt_stat.median		},
-			{"average", &preempt_stat.average	},
-			{"max", &preempt_stat.max		},
-			{"max_avg", &preempt_stat.max_avg	},
+			{"median",	&preempt_stat.median	},
+			{"average",	&preempt_stat.average	},
+			{"max",		&preempt_stat.max	},
+			{"max_avg",	&preempt_stat.max_avg	},
+			{"percentile",	&preempt_stat.percentile},
 		},
 	},
 };
@@ -138,6 +142,14 @@ static int u64_descending_cmp(const void *a, const void *b)
 
 	// descending order
 	return x > y ? -1 : x < y ? 1 : 0;
+}
+
+static int u64_ascending_cmp(const void *a, const void *b)
+{
+	const u64 x = *(const u64 *) a;
+	const u64 y = *(const u64 *) b;
+
+	return x < y ? -1 : x > y ? 1 : 0;
 }
 
 static bool min_heap_less(const void *lhs, const void *rhs, void *args)
@@ -174,14 +186,25 @@ static u64 compute_heap_average(struct u64_min_heap *h)
 	return total / h->nr;
 }
 
+static u64 nth_percentile(u64 percentile, u64 *p, size_t n)
+{
+	size_t tmp, pos;
+
+	WARN_ON(check_mul_overflow((u64) n, percentile, &tmp));
+	pos = div64_ul(tmp, 100);
+	pos = clamp(pos, 0, n - 1);
+	sort(p, n, sizeof(u64), u64_ascending_cmp, u64_swp);
+	return p[pos];
+}
+
 static u64 median_and_max(u64 *p, size_t n, u64 *max_val)
 {
 	const size_t pos = n / 2;
 
-	sort(p, n, sizeof(u64), u64_descending_cmp, u64_swp);
+	sort(p, n, sizeof(u64), u64_ascending_cmp, u64_swp);
 
 	if (max_val)
-		*max_val = p[0];
+		*max_val = p[n-1];
 
 	if (n % 2)
 		return p[pos];
@@ -388,6 +411,50 @@ const struct file_operations benchmark_fops = {
 	.open	= simple_open,
 };
 
+static ssize_t percentile_write(struct file *file, const char __user *buffer,
+				size_t count, loff_t *ppos)
+{
+	const size_t n = READ_ONCE(nr_samples);
+	int ret;
+	unsigned int nth_percent;
+	u64 *irq	__free(kvfree) = NULL;
+	u64 *preempt	__free(kvfree) = NULL;
+
+	if (!n) {
+		pr_err_once("Number of samples cannot be zero\n");
+		return -EINVAL;
+	}
+
+	ret = kstrtouint_from_user(buffer, count, 0, &nth_percent);
+	if (ret)
+		return ret;
+
+	if (!nth_percent || nth_percent > 100) {
+		pr_err_once("The percentile value can't be zero or greater than 100\n");
+		return -EINVAL;
+	}
+
+	irq	= kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
+	preempt = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
+	if (!irq || !preempt)
+		return -ENOMEM;
+
+	pr_debug("Calculating the %uth percentile\n", nth_percent);
+
+	collect_data(irq, preempt, n);
+	WRITE_ONCE(irqsoff_stat.percentile, nth_percentile(nth_percent, irq, n));
+	WRITE_ONCE(preempt_stat.percentile, nth_percentile(nth_percent, preempt, n));
+
+	return count;
+}
+
+const struct file_operations percentile_fops = {
+	.owner	= THIS_MODULE,
+	.write	= percentile_write,
+	.llseek = noop_llseek,
+	.open	= simple_open,
+};
+
 static void __init create_config_files(struct dentry *parent)
 {
 	for (size_t i = 0; i < ARRAY_SIZE(configs); ++i)
@@ -433,6 +500,12 @@ static int __init mod_init(void)
 		return PTR_ERR(rootdir);
 
 	file = debugfs_create_file("benchmark", 0200, rootdir, NULL, &benchmark_fops);
+	if (IS_ERR(file)) {
+		ret = PTR_ERR(file);
+		goto err;
+	}
+
+	file = debugfs_create_file("percentile", 0200, rootdir, NULL, &percentile_fops);
 	if (IS_ERR(file)) {
 		ret = PTR_ERR(file);
 		goto err;
