@@ -66,6 +66,16 @@ struct percpu_data {
 	bool should_run;
 };
 
+struct debugfs_entry {
+	char *filename;
+	void *value;
+};
+
+static const struct debugfs_entry configs[] = {
+	{"nr_samples", &nr_samples},
+	{"nr_highest", &nr_highest},
+};
+
 static void u64_swp(void *a, void *b, int size)
 {
 	u64 tmp;
@@ -370,6 +380,13 @@ const struct file_operations benchmark_fops = {
 	.open	= simple_open,
 };
 
+static void create_config_files(struct dentry *parent)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(configs); ++i)
+		debugfs_create_size_t(configs[i].filename, 0644,
+				      parent, configs[i].value);
+}
+
 static struct dentry *rootdir;
 
 static int __init mod_init(void)
@@ -388,8 +405,7 @@ static int __init mod_init(void)
 	if (IS_ERR(file))
 		goto err;
 
-	debugfs_create_size_t("nr_highest", 0644, rootdir, &nr_highest);
-	debugfs_create_size_t("nr_samples", 0644, rootdir, &nr_samples);
+	create_config_files(rootdir);
 
 	return 0;
 
