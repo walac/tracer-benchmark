@@ -161,9 +161,12 @@ static const struct min_heap_callbacks cbs = {
 static void add_samples(struct u64_min_heap *h, const u64 *samples, size_t n)
 {
 	for (size_t i = 0; i < n; ++i) {
-		min_heap_push_inline(h, &samples[i], &cbs, NULL);
-		if (min_heap_full_inline(h))
-			min_heap_pop_inline(h, &cbs, NULL);
+		if (!min_heap_full_inline(h))
+			min_heap_push_inline(h, &samples[i], &cbs, NULL);
+		else if (samples[i] > h->data[0]) {
+			h->data[0] = samples[i];
+			min_heap_sift_down_inline(h, 0, &cbs, NULL);
+		}
 	}
 }
 
@@ -284,8 +287,8 @@ static void sample_thread_fn(unsigned int cpu)
 	put_cpu_ptr(&data);
 
 	guard(mutex)(&heap_lock);
-	add_samples(&irqsoff_heap, irqsoff, nh);
-	add_samples(&preempt_heap, preempt, nh);
+	add_samples(&irqsoff_heap, irqsoff + (n - nh), nh);
+	add_samples(&preempt_heap, preempt + (n - nh), nh);
 }
 
 static int sample_thread_should_run(unsigned int cpu)
