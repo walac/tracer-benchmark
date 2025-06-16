@@ -50,7 +50,7 @@ DEFINE_MIN_HEAP(u64, u64_min_heap);
 
 struct statistics {
 	u64 median;
-	u64 average;
+	u64 avg;
 	u64 max;
 	u64 max_avg;
 	u64 percentile;
@@ -60,7 +60,7 @@ struct statistics {
 
 #define STATISTICS_INITIALIZER {	\
 	.median		= 0,		\
-	.average	= 0,		\
+	.avg		= 0,		\
 	.max		= 0,		\
 	.max_avg	= 0,		\
 	.percentile	= 0,		\
@@ -107,7 +107,7 @@ static const struct debugfs_results debugfs_result_files[] = {
 		"irq",
 		{
 			{"median",	&irq_stat.median	},
-			{"average",	&irq_stat.average	},
+			{"average",	&irq_stat.avg		},
 			{"max",		&irq_stat.max		},
 			{"max_avg",	&irq_stat.max_avg	},
 			{"percentile",	&irq_stat.percentile	},
@@ -117,7 +117,7 @@ static const struct debugfs_results debugfs_result_files[] = {
 		"preempt",
 		{
 			{"median",	&preempt_stat.median	},
-			{"average",	&preempt_stat.average	},
+			{"average",	&preempt_stat.avg	},
 			{"max",		&preempt_stat.max	},
 			{"max_avg",	&preempt_stat.max_avg	},
 			{"percentile",	&preempt_stat.percentile},
@@ -238,11 +238,11 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
 		WARN_ON(check_add_overflow(preempt_total, preempt_data[i], &preempt_total));
 	}
 
-	irq->median		= median_and_max(irq_data, n, &irq->max);
-	irq->average		= irq_total / n;
+	irq->median	= median_and_max(irq_data, n, &irq->max);
+	irq->avg	= irq_total / n;
 
-	preempt->median		= median_and_max(preempt_data, n, &preempt->max);
-	preempt->average	= preempt_total / n;
+	preempt->median	= median_and_max(preempt_data, n, &preempt->max);
+	preempt->avg	= preempt_total / n;
 }
 
 #define time_diff(call) ({		\
@@ -351,9 +351,8 @@ static int run_benchmark(void)
 			 * compute the average of the averages. Since the number of samples
 			 * is equal for all average, the math works
 			 */
-			WARN_ON(check_add_overflow(irq_total, my_data->irq.average,
-						   &irq_total));
-			WARN_ON(check_add_overflow(preempt_total, my_data->preempt.average,
+			WARN_ON(check_add_overflow(irq_total, my_data->irq.avg, &irq_total));
+			WARN_ON(check_add_overflow(preempt_total, my_data->preempt.avg,
 						   &preempt_total));
 
 			irq_max			= max(irq_max, my_data->irq.max);
@@ -366,12 +365,12 @@ static int run_benchmark(void)
 	}
 
 	irq_stat.median		= median_and_max(irq_medians, nr_cpus, NULL);
-	irq_stat.average	= irq_total / nr_cpus;
+	irq_stat.avg		= irq_total / nr_cpus;
 	irq_stat.max		= irq_max;
 	irq_stat.max_avg	= compute_heap_average(&irq_heap);
 
 	preempt_stat.median	= median_and_max(preempt_medians, nr_cpus, NULL);
-	preempt_stat.average	= preempt_total / nr_cpus;
+	preempt_stat.avg	= preempt_total / nr_cpus;
 	preempt_stat.max	= preempt_max;
 	preempt_stat.max_avg	= compute_heap_average(&preempt_heap);
 
