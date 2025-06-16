@@ -4,7 +4,7 @@
  *
  * This module measures the performance impact of local_irq_disable/enable and
  * preempt_disable/enable operations. The primary purpose is to quantify the
- * overhead introduced by the irqsoff and preempt tracers in the kernel.
+ * overhead introduced by the irq and preempt tracerpoints in the kernel.
  *
  * Implementation:
  * - Creates one worker thread per CPU
@@ -67,7 +67,7 @@ struct statistics {
 }
 
 struct percpu_data {
-	struct statistics irqsoff;
+	struct statistics irq;
 	struct statistics preempt;
 	bool should_run;
 };
@@ -83,17 +83,17 @@ struct debugfs_results {
 };
 
 static DEFINE_PER_CPU(struct percpu_data, data) = {
-	.irqsoff	= STATISTICS_INITIALIZER,
+	.irq		= STATISTICS_INITIALIZER,
 	.preempt	= STATISTICS_INITIALIZER,
 	.should_run	= true,
 };
 
 static DECLARE_COMPLETION(threads_should_run);
 static DEFINE_MUTEX(heap_lock);
-static struct u64_min_heap irqsoff_heap;
+static struct u64_min_heap irq_heap;
 static struct u64_min_heap preempt_heap;
 
-static struct statistics irqsoff_stat = STATISTICS_INITIALIZER;
+static struct statistics irq_stat = STATISTICS_INITIALIZER;
 static struct statistics preempt_stat = STATISTICS_INITIALIZER;
 
 
@@ -104,13 +104,13 @@ static const struct debugfs_entry __initdata configs[] = {
 
 static const struct debugfs_results debugfs_result_files[] = {
 	{
-		"irqsoff",
+		"irq",
 		{
-			{"median",	&irqsoff_stat.median	},
-			{"average",	&irqsoff_stat.average	},
-			{"max",		&irqsoff_stat.max	},
-			{"max_avg",	&irqsoff_stat.max_avg	},
-			{"percentile",	&irqsoff_stat.percentile},
+			{"median",	&irq_stat.median	},
+			{"average",	&irq_stat.average	},
+			{"max",		&irq_stat.max		},
+			{"max_avg",	&irq_stat.max_avg	},
+			{"percentile",	&irq_stat.percentile	},
 		},
 	},
 	{
@@ -221,25 +221,25 @@ static int init_heaps(void)
 	if (!p1 || !p2)
 		return -ENOMEM;
 
-	min_heap_init_inline(&irqsoff_heap, no_free_ptr(p1), n);
+	min_heap_init_inline(&irq_heap, no_free_ptr(p1), n);
 	min_heap_init_inline(&preempt_heap, no_free_ptr(p2), n);
 	return 0;
 }
 
-static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
+static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
 			       u64 *preempt_data, size_t n)
 {
-	struct statistics *irqsoff = &my_data->irqsoff;
+	struct statistics *irq = &my_data->irq;
 	struct statistics *preempt = &my_data->preempt;
-	u64 irqsoff_total = 0, preempt_total = 0;
+	u64 irq_total = 0, preempt_total = 0;
 
 	for (size_t i = 0; i < n; ++i) {
-		WARN_ON(check_add_overflow(irqsoff_total, irqsoff_data[i], &irqsoff_total));
+		WARN_ON(check_add_overflow(irq_total, irq_data[i], &irq_total));
 		WARN_ON(check_add_overflow(preempt_total, preempt_data[i], &preempt_total));
 	}
 
-	irqsoff->median		= median_and_max(irqsoff_data, n, &irqsoff->max);
-	irqsoff->average	= irqsoff_total / n;
+	irq->median		= median_and_max(irq_data, n, &irq->max);
+	irq->average		= irq_total / n;
 
 	preempt->median		= median_and_max(preempt_data, n, &preempt->max);
 	preempt->average	= preempt_total / n;
@@ -252,17 +252,17 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irqsoff_data,
 	ktime_get_ns() - ts;		\
 })
 
-static void collect_data(u64 *irqsoff, u64 *preempt, size_t n)
+static void collect_data(u64 *irq, u64 *preempt, size_t n)
 {
 	for (size_t i = 0; i < n; ++i) {
-		irqsoff[i] = time_diff(local_irq);
+		irq[i] = time_diff(local_irq);
 		preempt[i] = time_diff(preempt);
 	}
 }
 
 static void sample_thread_fn(unsigned int cpu)
 {
-	u64 *irqsoff __free(kvfree) = NULL;
+	u64 *irq __free(kvfree) = NULL;
 	u64 *preempt __free(kvfree) = NULL;
 	struct percpu_data *my_data;
 	const size_t n = READ_ONCE(nr_samples);
@@ -270,15 +270,15 @@ static void sample_thread_fn(unsigned int cpu)
 
 	pr_debug("sample thread starting\n");
 
-	irqsoff = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
+	irq = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
 	preempt = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
-	if (irqsoff && preempt) {
+	if (irq && preempt) {
 		wait_for_completion(&threads_should_run);
-		collect_data(irqsoff, preempt, n);
+		collect_data(irq, preempt, n);
 	}
 
 	my_data = get_cpu_ptr(&data);
-	compute_statistics(my_data, irqsoff, preempt, n);
+	compute_statistics(my_data, irq, preempt, n);
 
 	/*
 	 * Avoid we reenter the function before the main task call kthread_stop
@@ -287,7 +287,7 @@ static void sample_thread_fn(unsigned int cpu)
 	put_cpu_ptr(&data);
 
 	guard(mutex)(&heap_lock);
-	add_samples(&irqsoff_heap, irqsoff + (n - nh), nh);
+	add_samples(&irq_heap, irq + (n - nh), nh);
 	add_samples(&preempt_heap, preempt + (n - nh), nh);
 }
 
@@ -313,13 +313,13 @@ static struct smp_hotplug_thread sample_thread = {
 
 static int run_benchmark(void)
 {
-	u64 *irqsoff_medians __free(kfree) = NULL;
+	u64 *irq_medians __free(kfree) = NULL;
 	u64 *preempt_medians __free(kfree) = NULL;
 	size_t i, nr_cpus;
 	int ret = 0;
 	unsigned int cpu;
-	u64 irqsoff_total = 0, preempt_total = 0;
-	u64 irqsoff_max = 0, preempt_max = 0;
+	u64 irq_total = 0, preempt_total = 0;
+	u64 irq_max = 0, preempt_max = 0;
 
 	scoped_guard(cpus_read_lock) {
 		ret = smpboot_register_percpu_thread(&sample_thread);
@@ -338,9 +338,9 @@ static int run_benchmark(void)
 
 		nr_cpus = num_online_cpus();
 
-		irqsoff_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
+		irq_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
 		preempt_medians = kmalloc_array(nr_cpus, sizeof(u64), GFP_KERNEL);
-		if (!irqsoff_medians || !preempt_medians)
+		if (!irq_medians || !preempt_medians)
 			return -ENOMEM;
 
 		i = 0;
@@ -351,13 +351,13 @@ static int run_benchmark(void)
 			 * compute the average of the averages. Since the number of samples
 			 * is equal for all average, the math works
 			 */
-			WARN_ON(check_add_overflow(irqsoff_total, my_data->irqsoff.average,
-						   &irqsoff_total));
+			WARN_ON(check_add_overflow(irq_total, my_data->irq.average,
+						   &irq_total));
 			WARN_ON(check_add_overflow(preempt_total, my_data->preempt.average,
 						   &preempt_total));
 
-			irqsoff_max		= max(irqsoff_max, my_data->irqsoff.max);
-			irqsoff_medians[i]	= my_data->irqsoff.median;
+			irq_max			= max(irq_max, my_data->irq.max);
+			irq_medians[i]		= my_data->irq.median;
 
 			preempt_max		= max(preempt_max, my_data->preempt.max);
 			preempt_medians[i]	= my_data->preempt.median;
@@ -365,10 +365,10 @@ static int run_benchmark(void)
 		}
 	}
 
-	irqsoff_stat.median	= median_and_max(irqsoff_medians, nr_cpus, NULL);
-	irqsoff_stat.average	= irqsoff_total / nr_cpus;
-	irqsoff_stat.max	= irqsoff_max;
-	irqsoff_stat.max_avg	= compute_heap_average(&irqsoff_heap);
+	irq_stat.median		= median_and_max(irq_medians, nr_cpus, NULL);
+	irq_stat.average	= irq_total / nr_cpus;
+	irq_stat.max		= irq_max;
+	irq_stat.max_avg	= compute_heap_average(&irq_heap);
 
 	preempt_stat.median	= median_and_max(preempt_medians, nr_cpus, NULL);
 	preempt_stat.average	= preempt_total / nr_cpus;
@@ -396,7 +396,7 @@ static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 		return ret;
 
 	ret = run_benchmark();
-	kvfree(irqsoff_heap.data);
+	kvfree(irq_heap.data);
 	kvfree(preempt_heap.data);
 
 	return ret ? : count;
@@ -440,7 +440,7 @@ static ssize_t percentile_write(struct file *file, const char __user *buffer,
 	pr_debug("Calculating the %uth percentile\n", nth_percent);
 
 	collect_data(irq, preempt, n);
-	WRITE_ONCE(irqsoff_stat.percentile, nth_percentile(nth_percent, irq, n));
+	WRITE_ONCE(irq_stat.percentile, nth_percentile(nth_percent, irq, n));
 	WRITE_ONCE(preempt_stat.percentile, nth_percentile(nth_percent, preempt, n));
 
 	return count;

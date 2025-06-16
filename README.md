@@ -1,11 +1,11 @@
-# Linux Kernel Module: Benchmarking `irqsoff` and `preempt` Tracers
+# Linux Kernel Module: Benchmarking `local_irq` and `preempt` functions
 
 ## Overview
 
 This kernel module measures the performance overhead introduced by
 `local_irq_disable/enable()` and `preempt_disable/enable()` operations. Its
-primary purpose is to quantify the latency impact of enabling the `irqsoff`
-and `preempt` tracers in the kernel.
+primary purpose is to quantify the latency impact of enabling the tracepoints
+introduced in these functions.
 
 ## Key Features
 
@@ -56,7 +56,7 @@ Both are write-only.
 
 ### Output Files (Read-only)
 
-Organized in two subdirectories: `irqsoff/` and `preempt/`
+Organized in two subdirectories: `irq/` and `preempt/`
 
 Each contains:
 
@@ -85,14 +85,14 @@ echo 250 > nr_highest
 echo 1 > benchmark
 
 # View results
-cat irqsoff/average
+cat irq/average
 cat preempt/max
 
 # Calculate the 99th percentile
 echo 99 > percentile
 
 # View the percentile result
-cat irqsoff/percentile
+cat irq/percentile
 cat preempt/percentile
 ```
 
