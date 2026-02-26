@@ -287,6 +287,12 @@ static void sample_thread_fn(unsigned int cpu)
 	my_data->should_run = false;
 	put_cpu_ptr(&data);
 
+	/*
+	 * Feed the top nh samples into the global min-heaps for max_avg
+	 * computation. compute_statistics() sorts the arrays via
+	 * median_and_max(), so the highest values sit at the tail
+	 * and we can select them with a simple pointer offset.
+	 */
 	guard(mutex)(&heap_lock);
 	add_samples(&irq_heap, irq + (n - nh), nh);
 	add_samples(&preempt_heap, preempt + (n - nh), nh);
