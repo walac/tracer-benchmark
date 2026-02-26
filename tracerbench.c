@@ -402,7 +402,7 @@ static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 	return ret ? : count;
 }
 
-const struct file_operations benchmark_fops = {
+static const struct file_operations benchmark_fops = {
 	.owner	= THIS_MODULE,
 	.write	= benchmark_write,
 	.llseek = default_llseek,
@@ -446,7 +446,7 @@ static ssize_t percentile_write(struct file *file, const char __user *buffer,
 	return count;
 }
 
-const struct file_operations percentile_fops = {
+static const struct file_operations percentile_fops = {
 	.owner	= THIS_MODULE,
 	.write	= percentile_write,
 	.llseek = noop_llseek,
