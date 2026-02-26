@@ -4,7 +4,7 @@
  *
  * This module measures the performance impact of local_irq_disable/enable and
  * preempt_disable/enable operations. The primary purpose is to quantify the
- * overhead introduced by the irq and preempt tracerpoints in the kernel.
+ * overhead introduced by the IRQ and preempt tracepoints in the kernel.
  *
  * Implementation:
  * - Creates one worker thread per CPU
@@ -24,14 +24,12 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/printk.h>
-#include <linux/moduleparam.h>
 #include <linux/irqflags.h>
 #include <linux/preempt.h>
 #include <linux/ktime.h>
 #include <linux/percpu.h>
 #include <linux/kthread.h>
 #include <linux/smpboot.h>
-#include <linux/printk.h>
 #include <linux/completion.h>
 #include <linux/overflow.h>
 #include <linux/sort.h>
@@ -555,4 +553,4 @@ module_exit(mod_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Wander Lairson Costa");
-MODULE_DESCRIPTION("Benchmark the irqoffs and preempt tracers");
+MODULE_DESCRIPTION("Benchmark the IRQ and preempt tracers");
