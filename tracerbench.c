@@ -419,8 +419,9 @@ static ssize_t percentile_write(struct file *file, const char __user *buffer,
 				size_t count, loff_t *ppos)
 {
 	const size_t n = READ_ONCE(nr_samples);
-	int ret;
+	ssize_t ret;
 	unsigned int nth_percent;
+	cpumask_var_t saved __free(free_cpumask_var) = NULL;
 	u64 *irq	__free(kvfree) = NULL;
 	u64 *preempt	__free(kvfree) = NULL;
 
@@ -445,7 +446,18 @@ static ssize_t percentile_write(struct file *file, const char __user *buffer,
 
 	pr_debug("Calculating the %uth percentile\n", nth_percent);
 
+	if (!alloc_cpumask_var(&saved, GFP_KERNEL))
+		return -ENOMEM;
+
+	cpumask_copy(saved, current->cpus_ptr);
+
+	ret = set_cpus_allowed_ptr(current, cpumask_of(raw_smp_processor_id()));
+	if (ret)
+		return ret;
+
 	collect_data(irq, preempt, n);
+	set_cpus_allowed_ptr(current, saved);
+
 	WRITE_ONCE(irq_stat.percentile, nth_percentile(nth_percent, irq, n));
 	WRITE_ONCE(preempt_stat.percentile, nth_percentile(nth_percent, preempt, n));
 
