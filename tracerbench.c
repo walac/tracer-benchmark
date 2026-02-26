@@ -212,7 +212,7 @@ static int init_heaps(void)
 	 * one extra space to make it easier to compute when
 	 * the heap is full
 	 */
-	const size_t n = cached_nr_highest + 1;
+	const size_t n = READ_ONCE(cached_nr_highest) + 1;
 	void *p1 __free(kvfree) = NULL;
 	void *p2 __free(kvfree) = NULL;
 
@@ -384,6 +384,8 @@ static int run_benchmark(void)
 	return 0;
 }
 
+static DEFINE_MUTEX(benchmark_lock);
+
 static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 			      size_t count, loff_t *ppos)
 {
@@ -394,6 +396,8 @@ static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 		pr_err_once("Number of samples cannot be zero\n");
 		return -EINVAL;
 	}
+
+	guard(mutex)(&benchmark_lock);
 
 	WRITE_ONCE(cached_nr_highest, min(n, READ_ONCE(nr_highest)));
 
