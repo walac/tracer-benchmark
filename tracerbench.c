@@ -184,7 +184,7 @@ static u64 nth_percentile(u64 percentile, u64 *p, size_t n)
 {
 	size_t tmp, pos;
 
-	WARN_ON(check_mul_overflow((u64) n, percentile, &tmp));
+	WARN_ON(check_mul_overflow(n, percentile, &tmp));
 	pos = div64_ul(tmp, 100);
 	pos = clamp(pos, 0, n - 1);
 	sort(p, n, sizeof(u64), u64_cmp, u64_swp);
