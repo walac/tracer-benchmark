@@ -200,11 +200,15 @@ static void add_samples(struct u64_min_heap *h, const u64 *samples, size_t n)
 static u64 compute_heap_average(struct u64_min_heap *h)
 {
 	u64 total = 0;
+	const size_t n = h->nr;
 
-	for (size_t i = 0; i < h->nr; ++i)
+	if (unlikely(!n))
+		return 0;
+
+	for (size_t i = 0; i < n; ++i)
 		WARN_ON(check_add_overflow(total, h->data[i], &total));
 
-	return total / h->nr;
+	return total / n;
 }
 
 static u64 nth_percentile(u64 percentile, u64 *p, size_t n)
