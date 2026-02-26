@@ -40,9 +40,21 @@
 #include <linux/mutex.h>
 #include <linux/min_heap.h>
 
-static size_t nr_samples = 10000;
-static size_t nr_highest = 100;
-static size_t cached_nr_highest;
+/*
+ * Debugfs-writable configuration parameter with a snapshot for benchmark
+ * runs.  The user can change @val at any time via debugfs, so per-CPU
+ * worker threads must not read it directly.  Instead, benchmark_write()
+ * copies @val into @cached under the benchmark_lock before spawning
+ * threads, and the threads read only @cached.  This guarantees every
+ * thread sees the same value for the entire run.
+ */
+struct config {
+	size_t val;
+	size_t cached;
+};
+
+static struct config nr_samples = { .val = 10000 };
+static struct config nr_highest = { .val = 100 };
 
 DEFINE_MIN_HEAP(u64, u64_min_heap);
 
@@ -102,14 +114,14 @@ static struct statistics preempt_stat = STATISTICS_INITIALIZER;
 #define DEFINE_CONFIG_ATTR(name)					\
 static int name##_get(void *data, u64 *val)				\
 {									\
-	*val = READ_ONCE(name);						\
+	*val = READ_ONCE(name.val);					\
 	return 0;							\
 }									\
 static int name##_set(void *data, u64 val)				\
 {									\
 	if (!val)							\
 		return -EINVAL;						\
-	WRITE_ONCE(name, val);						\
+	WRITE_ONCE(name.val, val);					\
 	return 0;							\
 }									\
 DEFINE_DEBUGFS_ATTRIBUTE(name##_fops, name##_get, name##_set, "%llu\n")
@@ -227,7 +239,7 @@ static int init_heaps(void)
 	 * one extra space to make it easier to compute when
 	 * the heap is full
 	 */
-	const size_t n = READ_ONCE(cached_nr_highest) + 1;
+	const size_t n = READ_ONCE(nr_highest.cached) + 1;
 	void *p1 __free(kvfree) = NULL;
 	void *p2 __free(kvfree) = NULL;
 
@@ -280,8 +292,8 @@ static void sample_thread_fn(unsigned int cpu)
 	u64 *irq __free(kvfree) = NULL;
 	u64 *preempt __free(kvfree) = NULL;
 	struct percpu_data *my_data;
-	const size_t n = READ_ONCE(nr_samples);
-	const size_t nh = READ_ONCE(cached_nr_highest);
+	const size_t n = READ_ONCE(nr_samples.cached);
+	const size_t nh = READ_ONCE(nr_highest.cached);
 
 	pr_debug("sample thread starting\n");
 
@@ -407,7 +419,7 @@ static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 			      size_t count, loff_t *ppos)
 {
 	int ret;
-	const size_t n = READ_ONCE(nr_samples);
+	const size_t n = READ_ONCE(nr_samples.val);
 
 	if (!n) {
 		pr_err_once("Number of samples cannot be zero\n");
@@ -416,7 +428,8 @@ static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 
 	guard(mutex)(&benchmark_lock);
 
-	WRITE_ONCE(cached_nr_highest, min(n, READ_ONCE(nr_highest)));
+	WRITE_ONCE(nr_samples.cached, n);
+	WRITE_ONCE(nr_highest.cached, min(n, READ_ONCE(nr_highest.val)));
 
 	ret = init_heaps();
 	if (ret)
@@ -439,7 +452,7 @@ static const struct file_operations benchmark_fops = {
 static ssize_t percentile_write(struct file *file, const char __user *buffer,
 				size_t count, loff_t *ppos)
 {
-	const size_t n = READ_ONCE(nr_samples);
+	const size_t n = READ_ONCE(nr_samples.val);
 	ssize_t ret;
 	unsigned int nth_percent;
 	cpumask_var_t saved __free(free_cpumask_var) = NULL;
