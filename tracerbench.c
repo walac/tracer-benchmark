@@ -272,10 +272,11 @@ static void sample_thread_fn(unsigned int cpu)
 
 	irq = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
 	preempt = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
-	if (irq && preempt) {
-		wait_for_completion(&threads_should_run);
-		collect_data(irq, preempt, n);
-	}
+	if (!irq || !preempt)
+		return;
+
+	wait_for_completion(&threads_should_run);
+	collect_data(irq, preempt, n);
 
 	my_data = get_cpu_ptr(&data);
 	compute_statistics(my_data, irq, preempt, n);
