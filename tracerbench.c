@@ -463,7 +463,7 @@ static void __init create_config_files(struct dentry *parent)
 
 static int __init create_stat_files(struct dentry *parent)
 {
-	static const umode_t mode = 0x444;
+	static const umode_t mode = 0444;
 	struct dentry *subdir;
 
 	for (size_t i = 0; i < ARRAY_SIZE(debugfs_result_files); ++i) {
