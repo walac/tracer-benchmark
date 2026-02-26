@@ -95,10 +95,27 @@ static struct statistics irq_stat = STATISTICS_INITIALIZER;
 static struct statistics preempt_stat = STATISTICS_INITIALIZER;
 
 
-static const struct debugfs_entry __initdata configs[] = {
-	{"nr_samples", &nr_samples	},
-	{"nr_highest", &nr_highest	},
-};
+/*
+ * Generate debugfs get/set accessors and file_operations for a size_t
+ * config variable that must be non-zero.
+ */
+#define DEFINE_CONFIG_ATTR(name)					\
+static int name##_get(void *data, u64 *val)				\
+{									\
+	*val = READ_ONCE(name);						\
+	return 0;							\
+}									\
+static int name##_set(void *data, u64 val)				\
+{									\
+	if (!val)							\
+		return -EINVAL;						\
+	WRITE_ONCE(name, val);						\
+	return 0;							\
+}									\
+DEFINE_DEBUGFS_ATTRIBUTE(name##_fops, name##_get, name##_set, "%llu\n")
+
+DEFINE_CONFIG_ATTR(nr_samples);
+DEFINE_CONFIG_ATTR(nr_highest);
 
 static const struct debugfs_results debugfs_result_files[] = {
 	{
@@ -475,11 +492,23 @@ static const struct file_operations percentile_fops = {
 	.open	= simple_open,
 };
 
+struct debugfs_config {
+	const char *filename;
+	const struct file_operations *fops;
+};
+
+#define CONFIG_ENTRY(name)	{ #name, &name##_fops }
+
+static const struct debugfs_config __initdata configs[] = {
+	CONFIG_ENTRY(nr_samples),
+	CONFIG_ENTRY(nr_highest),
+};
+
 static void __init create_config_files(struct dentry *parent)
 {
 	for (size_t i = 0; i < ARRAY_SIZE(configs); ++i)
-		debugfs_create_size_t(configs[i].filename, 0644,
-				      parent, configs[i].value);
+		debugfs_create_file_unsafe(configs[i].filename, 0644,
+					   parent, NULL, configs[i].fops);
 }
 
 
