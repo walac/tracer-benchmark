@@ -6,3 +6,7 @@ compile_commands.json
 *.order
 *.symvers
 *.cmd
+CLAUDE.md
+.serena/
+.cache/
+.claude
