@@ -1,72 +1,101 @@
-# Linux Kernel Module: Benchmarking `local_irq` and `preempt` functions
+# tracerbench
 
-## Overview
-
-This kernel module measures the performance overhead introduced by
+A Linux kernel module that benchmarks the latency overhead of
 `local_irq_disable/enable()` and `preempt_disable/enable()` operations. Its
-primary purpose is to quantify the latency impact of enabling the tracepoints
-introduced in these functions.
+primary purpose is to quantify the performance impact of enabling the
+tracepoints in these kernel functions.
+
+## Building
+
+```bash
+make -C /lib/modules/$(uname -r)/build M=$PWD modules
+```
+
+## Loading
+
+```bash
+sudo insmod tracerbench.ko
+```
 
 ## Key Features
 
-- **Per-CPU Benchmarking**: Spawns one kernel thread per CPU.
-- **Sampling**: Each thread performs a configurable number of samples
-  (`nr_samples`), where it times:
+- **Per-CPU benchmarking**: spawns one kernel thread per online CPU
+- **Configurable sampling**: each thread performs `nr_samples` timing
+  measurements of:
   1. `local_irq_disable()` + `local_irq_enable()`
   2. `preempt_disable()` + `preempt_enable()`
-- **Statistics Collection**: For each CPU and for the global system:
-  - Median
-  - Average
-  - Maximum
-  - Average of the highest N samples (`max_avg`)
-  - Arbitrary percentile
-- **Results Exported via `debugfs`**
+- **Statistical analysis**: median, average, maximum, and average of the
+  top-N highest samples (`max_avg`)
+- **Percentile computation**: independent single-CPU operation for
+  arbitrary percentile calculation
+- **Results exported via debugfs**
 
 ## How It Works
 
-1. When triggered via debugfs (`benchmark` file), one thread per CPU is started.
-2. Threads simultaneously benchmark the IRQ and preemption toggling by measuring
-   the time (in nanoseconds) before and after each pair of operations.
-3. Per-CPU statistics are computed.
-4. The results are aggregated system-wide and stored in memory for inspection.
+### Benchmark
 
-## `debugfs` Interface
+1. Writing to the debugfs `benchmark` file snapshots the current
+   `nr_samples` and `nr_highest` configuration so that mid-flight
+   changes do not affect a running benchmark.
+2. Per-CPU threads are spawned via `smpboot_register_percpu_thread()`
+   inside a `cpus_read_lock` guard to prevent CPU hotplug during the
+   run.
+3. All threads wait on a completion barrier, then start sampling
+   simultaneously.
+4. Each thread measures ns-level latency using `ktime_get_ns()` around
+   each disable/enable pair and computes per-CPU statistics (median,
+   average, max).
+5. Each CPU feeds its top `nr_highest` samples into shared min-heaps
+   (one for IRQ, one for preempt) under a mutex. The min-heap
+   efficiently tracks the globally highest samples: new values only
+   replace the heap root if they are larger.
+6. After all threads complete, global statistics are aggregated:
+   - **median**: median of per-CPU medians
+   - **avg**: mean of per-CPU averages
+   - **max**: maximum across all CPUs
+   - **max_avg**: average of the global min-heap contents (i.e., the
+     mean of the worst-case samples across all CPUs)
 
-After module insertion, a directory is created under
-`/sys/kernel/debug/` (usually
-`/sys/kernel/debug/tracerbenchmark/`).
+### Percentile
+
+Writing a value (1-100) to the `percentile` file collects fresh samples
+on the **current CPU only**, sorts them, and computes the nth percentile.
+This is independent of the benchmark flow.
+
+## debugfs Interface
+
+After loading the module, a directory is created at
+`/sys/kernel/debug/tracerbench/`.
 
 ### Configuration Files
 
-| File         | Description                         |
-|--------------|-------------------------------------|
-| `nr_samples` | Number of samples per CPU (default: 10,000) |
-| `nr_highest` | Number of highest samples to track for `max_avg` computation (default: 100) |
+| File         | Description                                                  |
+|--------------|--------------------------------------------------------------|
+| `nr_samples` | Number of samples per CPU (default: 10,000)                  |
+| `nr_highest` | Number of highest samples to track for `max_avg` (default: 100) |
 
-These are writable `size_t` files.
+Both are readable and writable.
 
-### Trigger Files
+### Trigger Files (write-only)
 
-| File         | Description                                     |
-|--------------|-------------------------------------------------|
-| `benchmark`  | Write anything to start the full benchmark run  |
-| `percentile` | Write a value between `1` and `100` to compute that percentile |
+| File         | Description                                                     |
+|--------------|-----------------------------------------------------------------|
+| `benchmark`  | Write anything to start the full per-CPU benchmark run          |
+| `percentile` | Write a value between 1 and 100 to compute that percentile      |
 
-Both are write-only.
+### Result Files (read-only)
 
-### Output Files (Read-only)
-
-Organized in two subdirectories: `irq/` and `preempt/`
+Results are organized in two subdirectories: `irq/` and `preempt/`.
 
 Each contains:
 
-| File         | Description                              |
-|--------------|------------------------------------------|
-| `median`     | Median time (ns)                         |
-| `average`    | Average time (ns)                        |
-| `max`        | Maximum single sample (ns)               |
-| `max_avg`    | Average of top-N longest samples (ns)    |
-| `percentile` | Nth percentile from last `percentile` run|
+| File         | Description                                    |
+|--------------|------------------------------------------------|
+| `median`     | Median latency (ns)                            |
+| `average`    | Average latency (ns)                           |
+| `max`        | Maximum single-sample latency (ns)             |
+| `max_avg`    | Average of the top-N highest samples (ns)      |
+| `percentile` | Nth percentile from the last `percentile` run  |
 
 ### Example Usage
 
@@ -74,30 +103,32 @@ Each contains:
 # Mount debugfs if not already done
 mount -t debugfs none /sys/kernel/debug
 
-# Change into the module's debugfs directory
-cd /sys/kernel/debug/tracerbenchmark/
+cd /sys/kernel/debug/tracerbench/
 
 # Configure parameters
 echo 50000 > nr_samples
 echo 250 > nr_highest
 
-# Start the benchmark
+# Run the benchmark
 echo 1 > benchmark
 
 # View results
 cat irq/average
 cat preempt/max
 
-# Calculate the 99th percentile
+# Calculate the 99th percentile (runs on current CPU only)
 echo 99 > percentile
-
-# View the percentile result
 cat irq/percentile
 cat preempt/percentile
 ```
 
-## Dependencies
+## Unloading
 
-Ensure that `debugfs` is mounted and accessible. The module relies on debugfs
-for both configuration and result output.
+```bash
+sudo rmmod tracerbench
+```
+
+## License
+
+GPL-2.0-only
 
