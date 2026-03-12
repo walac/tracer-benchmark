@@ -297,6 +297,22 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
 	compute_one_stat(&my_data->irq_save, irq_save_data, n);
 }
 
+#define OVERHEAD_SAMPLES 100
+
+static noinline u64 measure_overhead(void)
+{
+	u64 total = 0;
+	size_t i;
+
+	for (i = 0; i < OVERHEAD_SAMPLES; ++i) {
+		const u64 ts = get_cycles();
+
+		total += get_cycles() - ts;
+	}
+
+	return total / OVERHEAD_SAMPLES;
+}
+
 #define time_diff(call) ({		\
 	const u64 ts = get_cycles();	\
 	call##_disable();		\
@@ -312,8 +328,19 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
 	get_cycles() - ts;			\
 })
 
+static void subtract_overhead(u64 *samples, size_t n, u64 overhead)
+{
+	for (size_t i = 0; i < n; ++i) {
+		if (samples[i] > overhead)
+			samples[i] -= overhead;
+		else
+			samples[i] = 0;
+	}
+}
+
 static void collect_data(u64 *irq, u64 *preempt, u64 *irq_save, size_t n)
 {
+	u64 overhead;
 	size_t i;
 
 	for (i = 0; i < n; ++i)
@@ -324,6 +351,11 @@ static void collect_data(u64 *irq, u64 *preempt, u64 *irq_save, size_t n)
 
 	for (i = 0; i < n; ++i)
 		irq_save[i] = time_diff_save_restore();
+
+	overhead = measure_overhead();
+	subtract_overhead(irq, n, overhead);
+	subtract_overhead(preempt, n, overhead);
+	subtract_overhead(irq_save, n, overhead);
 }
 
 static void sample_thread_fn(unsigned int cpu)
