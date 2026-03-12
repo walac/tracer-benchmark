@@ -314,11 +314,16 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
 
 static void collect_data(u64 *irq, u64 *preempt, u64 *irq_save, size_t n)
 {
-	for (size_t i = 0; i < n; ++i) {
+	size_t i;
+
+	for (i = 0; i < n; ++i)
 		irq[i] = time_diff(local_irq);
+
+	for (i = 0; i < n; ++i)
 		preempt[i] = time_diff(preempt);
+
+	for (i = 0; i < n; ++i)
 		irq_save[i] = time_diff_save_restore();
-	}
 }
 
 static void sample_thread_fn(unsigned int cpu)
