@@ -14,10 +14,11 @@
  *   3. Disables preemption (preempt_disable)
  *   4. Enables preemption (preempt_enable)
  *   5. Saves and restores local interrupts (local_irq_save/restore)
- * - Tracks execution times and stores them across all CPUs
+ * - Tracks execution times (in CPU cycles via get_cycles()) across all CPUs
  *
  * The collected data helps analyze the worst-case latency impacts of these
- * operations when tracing is active.
+ * operations when tracing is active.  Results are reported in raw CPU
+ * cycles to minimize timing overhead and improve signal-to-noise ratio.
  */
 
 //#define DEBUG
@@ -28,6 +29,7 @@
 #include <linux/irqflags.h>
 #include <linux/preempt.h>
 #include <linux/ktime.h>
+#include <linux/timex.h>
 #include <linux/percpu.h>
 #include <linux/kthread.h>
 #include <linux/smpboot.h>
@@ -296,18 +298,18 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
 }
 
 #define time_diff(call) ({		\
-	const u64 ts = ktime_get_ns();	\
+	const u64 ts = get_cycles();	\
 	call##_disable();		\
 	call##_enable();		\
-	ktime_get_ns() - ts;		\
+	get_cycles() - ts;		\
 })
 
 #define time_diff_save_restore() ({		\
 	unsigned long __flags;			\
-	const u64 ts = ktime_get_ns();		\
+	const u64 ts = get_cycles();		\
 	local_irq_save(__flags);		\
 	local_irq_restore(__flags);		\
-	ktime_get_ns() - ts;			\
+	get_cycles() - ts;			\
 })
 
 static void collect_data(u64 *irq, u64 *preempt, u64 *irq_save, size_t n)

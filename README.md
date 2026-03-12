@@ -1,9 +1,11 @@
 # tracerbench
 
 A Linux kernel module that benchmarks the latency overhead of
-`local_irq_disable/enable()` and `preempt_disable/enable()` operations. Its
-primary purpose is to quantify the performance impact of enabling the
-tracepoints in these kernel functions.
+`local_irq_disable/enable()`, `preempt_disable/enable()`, and
+`local_irq_save/restore()` operations. Its primary purpose is to
+quantify the performance impact of enabling the tracepoints in these
+kernel functions.  Results are reported in raw CPU cycles
+(`get_cycles()`) for minimal timing overhead.
 
 ## Prerequisites
 
@@ -30,6 +32,7 @@ sudo insmod tracerbench.ko
   measurements of:
   1. `local_irq_disable()` + `local_irq_enable()`
   2. `preempt_disable()` + `preempt_enable()`
+  3. `local_irq_save()` + `local_irq_restore()`
 - **Statistical analysis**: median, average, maximum, and average of the
   top-N highest samples (`max_avg`)
 - **Percentile computation**: independent single-CPU operation for
@@ -93,6 +96,12 @@ After loading the module, the following tree is created under debugfs:
         max             (r-)  result
         max_avg         (r-)  result
         percentile      (r-)  result
+    irq_save/
+        median          (r-)  result
+        average         (r-)  result
+        max             (r-)  result
+        max_avg         (r-)  result
+        percentile      (r-)  result
 ```
 
 ### Configuration Files
@@ -114,17 +123,18 @@ Both are readable and writable. Zero values are rejected with
 
 ### Result Files (read-only)
 
-Results are organized in two subdirectories: `irq/` and `preempt/`.
+Results are organized in three subdirectories: `irq/`, `preempt/`,
+and `irq_save/`.
 
 Each contains:
 
-| File         | Description                                    |
-|--------------|------------------------------------------------|
-| `median`     | Median latency (ns)                            |
-| `average`    | Average latency (ns)                           |
-| `max`        | Maximum single-sample latency (ns)             |
-| `max_avg`    | Average of the top-N highest samples (ns)      |
-| `percentile` | Nth percentile from the last `percentile` run  |
+| File         | Description                                       |
+|--------------|---------------------------------------------------|
+| `median`     | Median latency (cycles)                           |
+| `average`    | Average latency (cycles)                          |
+| `max`        | Maximum single-sample latency (cycles)            |
+| `max_avg`    | Average of the top-N highest samples (cycles)     |
+| `percentile` | Nth percentile from the last `percentile` run     |
 
 ### Example Usage
 
@@ -141,14 +151,16 @@ echo 250 > nr_highest
 # Run the benchmark (blocks until complete)
 echo 1 > benchmark
 
-# View results
+# View results (values are in CPU cycles)
 cat irq/average
 cat preempt/max
+cat irq_save/average
 
 # Calculate the 99th percentile (runs on current CPU only)
 echo 99 > percentile
 cat irq/percentile
 cat preempt/percentile
+cat irq_save/percentile
 ```
 
 ## Design
@@ -160,7 +172,10 @@ hotplug from changing the set of online CPUs mid-benchmark.
 All threads wait on a `completion` barrier so they begin sampling at the
 same time. The `time_diff()` macro uses token-pasting to expand
 `local_irq` into `local_irq_disable()`/`local_irq_enable()` (and
-likewise for `preempt`), measuring the elapsed time via `ktime_get_ns()`.
+likewise for `preempt`), measuring the elapsed time via `get_cycles()`.
+A separate `time_diff_save_restore()` macro handles the
+`local_irq_save()`/`local_irq_restore()` pair, which requires a flags
+argument.
 
 Per-CPU statistics are computed locally. Sorting (for median and max)
 is done in a single pass via `median_and_max()`. Each CPU then feeds
