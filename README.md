@@ -82,6 +82,7 @@ After loading the module, the following tree is created under debugfs:
 /sys/kernel/debug/tracerbench/
     nr_samples          (rw)  configuration
     nr_highest          (rw)  configuration
+    do_work             (rw)  configuration
     benchmark           (-w)  trigger
     percentile          (-w)  trigger
     irq/
@@ -110,9 +111,10 @@ After loading the module, the following tree is created under debugfs:
 |--------------|--------------------------------------------------------------|
 | `nr_samples` | Number of samples per CPU (default: 10,000)                  |
 | `nr_highest` | Number of highest samples to track for `max_avg` (default: 100) |
+| `do_work`    | Simulate critical section work between disable/enable (default: 0) |
 
-Both are readable and writable. Zero values are rejected with
-`-EINVAL`.
+`nr_samples` and `nr_highest` are readable and writable. Zero values
+are rejected with `-EINVAL`.  `do_work` is a boolean toggle (0 or 1).
 
 ### Trigger Files (write-only)
 
@@ -156,6 +158,11 @@ cat irq/average
 cat preempt/max
 cat irq_save/average
 
+# Run again with simulated critical section work
+echo 1 > do_work
+echo 1 > benchmark
+cat irq/average        # compare with previous run
+
 # Calculate the 99th percentile (runs on current CPU only)
 echo 99 > percentile
 cat irq/percentile
@@ -176,6 +183,14 @@ likewise for `preempt`), measuring the elapsed time via `get_cycles()`.
 A separate `time_diff_save_restore()` macro handles the
 `local_irq_save()`/`local_irq_restore()` pair, which requires a flags
 argument.
+
+When `do_work` is enabled, a `noinline` function
+`simulate_critical_section()` is called between each disable/enable
+pair.  It performs a percpu read-modify-write with a data-dependent
+branch and a `current->pid` access, representative of what real
+critical sections do.  The cost of this simulated work is included in
+the timer overhead measurement and subtracted from each sample, so
+results still reflect only the disable/enable cost.
 
 Per-CPU statistics are computed locally. Sorting (for median and max)
 is done in a single pass via `median_and_max()`. Each CPU then feeds

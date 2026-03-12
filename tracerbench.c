@@ -58,6 +58,7 @@ struct config {
 
 static struct config nr_samples = { .val = 10000 };
 static struct config nr_highest = { .val = 100 };
+static bool do_work;
 
 DEFINE_MIN_HEAP(u64, u64_min_heap);
 
@@ -297,33 +298,91 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
 	compute_one_stat(&my_data->irq_save, irq_save_data, n);
 }
 
+/*
+ * Simulate a realistic critical section.
+ *
+ * Back-to-back disable/enable with no work between them never occurs in
+ * real kernel code and gives the CPU pipeline, branch predictor, and
+ * register allocator an unrealistically easy job.  This function
+ * provides a lightweight workload representative of what actual critical
+ * sections do:
+ *
+ *  - Percpu read-modify-write (the most common pattern inside
+ *    local_irq_save/restore critical sections, e.g. softirq pending
+ *    bits, statistics counters).
+ *
+ *  - Data-dependent branch that is hard for the branch predictor to
+ *    learn, unlike a constant-condition loop.
+ *
+ *  - Access to current->pid, which touches a different cache line than
+ *    the percpu variable, simulating the mixed-locality memory access
+ *    patterns typical of real critical sections.
+ *
+ * Marked noinline so the compiler cannot fold this into the
+ * disable/enable macros, which would change their code generation
+ * and defeat the purpose of measuring their overhead in a realistic
+ * register-pressure context.
+ *
+ * Controlled by the 'do_work' debugfs toggle (default off).
+ */
+static DEFINE_PER_CPU(unsigned long, work_counter);
+
+static noinline void simulate_critical_section(void)
+{
+	unsigned long *p = this_cpu_ptr(&work_counter);
+	unsigned long val = READ_ONCE(*p);
+
+	if (val & 0x1)
+		val += raw_smp_processor_id();
+	else
+		val ^= current->pid;
+
+	WRITE_ONCE(*p, val + 1);
+}
+
 #define OVERHEAD_SAMPLES 100
 
+/*
+ * Measure the cost of the timing infrastructure itself.
+ *
+ * Average OVERHEAD_SAMPLES back-to-back get_cycles() pairs to get a
+ * stable estimate of the timer overhead.  When do_work is enabled,
+ * include the cost of simulate_critical_section() in the overhead so
+ * that it is subtracted from the final results, isolating only the
+ * disable/enable cost.
+ */
 static noinline u64 measure_overhead(void)
 {
+	const bool work = READ_ONCE(do_work);
 	u64 total = 0;
 	size_t i;
 
 	for (i = 0; i < OVERHEAD_SAMPLES; ++i) {
 		const u64 ts = get_cycles();
 
+		if (work)
+			simulate_critical_section();
 		total += get_cycles() - ts;
 	}
 
 	return total / OVERHEAD_SAMPLES;
 }
 
-#define time_diff(call) ({		\
+#define time_diff(call, work) ({	\
 	const u64 ts = get_cycles();	\
 	call##_disable();		\
+	if (work)			\
+		simulate_critical_section();\
 	call##_enable();		\
 	get_cycles() - ts;		\
 })
 
-#define time_diff_save_restore() ({		\
+#define time_diff_save_restore(work) ({		\
 	unsigned long __flags;			\
 	const u64 ts = get_cycles();		\
 	local_irq_save(__flags);		\
+	if (work)				\
+		simulate_critical_section();	\
 	local_irq_restore(__flags);		\
 	get_cycles() - ts;			\
 })
@@ -340,17 +399,18 @@ static void subtract_overhead(u64 *samples, size_t n, u64 overhead)
 
 static void collect_data(u64 *irq, u64 *preempt, u64 *irq_save, size_t n)
 {
+	const bool work = READ_ONCE(do_work);
 	u64 overhead;
 	size_t i;
 
 	for (i = 0; i < n; ++i)
-		irq[i] = time_diff(local_irq);
+		irq[i] = time_diff(local_irq, work);
 
 	for (i = 0; i < n; ++i)
-		preempt[i] = time_diff(preempt);
+		preempt[i] = time_diff(preempt, work);
 
 	for (i = 0; i < n; ++i)
-		irq_save[i] = time_diff_save_restore();
+		irq_save[i] = time_diff_save_restore(work);
 
 	overhead = measure_overhead();
 	subtract_overhead(irq, n, overhead);
@@ -616,6 +676,7 @@ static void __init create_config_files(struct dentry *parent)
 	for (size_t i = 0; i < ARRAY_SIZE(configs); ++i)
 		debugfs_create_file_unsafe(configs[i].filename, 0644,
 					   parent, NULL, configs[i].fops);
+	debugfs_create_bool("do_work", 0644, parent, &do_work);
 }
 
 
