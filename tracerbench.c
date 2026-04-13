@@ -345,8 +345,9 @@ static noinline void simulate_critical_section(void)
 /*
  * Measure the cost of the timing infrastructure itself.
  *
- * Average OVERHEAD_SAMPLES back-to-back get_cycles() pairs to get a
- * stable estimate of the timer overhead.  When do_work is enabled,
+ * Take the median of OVERHEAD_SAMPLES back-to-back get_cycles() pairs
+ * to get a stable estimate of the timer overhead.  The median resists
+ * outliers from interrupts and VM exits.  When do_work is enabled,
  * include the cost of simulate_critical_section() in the overhead so
  * that it is subtracted from the final results, isolating only the
  * disable/enable cost.
@@ -354,7 +355,7 @@ static noinline void simulate_critical_section(void)
 static noinline u64 measure_overhead(void)
 {
 	const bool work = READ_ONCE(do_work);
-	u64 total = 0;
+	u64 samples[OVERHEAD_SAMPLES];
 	size_t i;
 
 	for (i = 0; i < OVERHEAD_SAMPLES; ++i) {
@@ -362,10 +363,10 @@ static noinline u64 measure_overhead(void)
 
 		if (work)
 			simulate_critical_section();
-		total += get_cycles() - ts;
+		samples[i] = get_cycles() - ts;
 	}
 
-	return total / OVERHEAD_SAMPLES;
+	return median_and_max(samples, OVERHEAD_SAMPLES, NULL);
 }
 
 #define time_diff(call, work) ({	\
