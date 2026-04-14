@@ -245,17 +245,6 @@ static u64 compute_heap_average(struct u64_min_heap *h)
 	return total / n;
 }
 
-static u64 compute_percentile(u64 percentile, u64 *p, size_t n)
-{
-	size_t tmp, pos;
-
-	WARN_ON(check_mul_overflow(n, percentile, &tmp));
-	pos = div64_ul(tmp, 100);
-	pos = clamp(pos, 0, n - 1);
-	sort(p, n, sizeof(u64), u64_cmp, u64_swp);
-	return p[pos];
-}
-
 static u64 median_and_max(u64 *p, size_t n, u64 *max_val)
 {
 	const size_t pos = n / 2;
@@ -627,68 +616,6 @@ static const struct file_operations benchmark_fops = {
 	.open	= simple_open,
 };
 
-static ssize_t percentile_write(struct file *file, const char __user *buffer,
-				size_t count, loff_t *ppos)
-{
-	const size_t n = READ_ONCE(nr_samples.val);
-	ssize_t ret;
-	unsigned int nth_percent;
-	cpumask_var_t saved;
-	u64 *irq	__free(kvfree) = NULL;
-	u64 *preempt	__free(kvfree) = NULL;
-	u64 *irq_save	__free(kvfree) = NULL;
-
-	if (!n) {
-		pr_err_once("Number of samples cannot be zero\n");
-		return -EINVAL;
-	}
-
-	ret = kstrtouint_from_user(buffer, count, 0, &nth_percent);
-	if (ret)
-		return ret;
-
-	if (!nth_percent || nth_percent > 100) {
-		pr_err_once("The percentile value can't be zero or greater than 100\n");
-		return -EINVAL;
-	}
-
-	irq	= kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
-	preempt	= kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
-	irq_save = kvmalloc_array(n, sizeof(u64), GFP_KERNEL);
-	if (!irq || !preempt || !irq_save)
-		return -ENOMEM;
-
-	pr_debug("Calculating the %uth percentile\n", nth_percent);
-
-	if (!alloc_cpumask_var(&saved, GFP_KERNEL))
-		return -ENOMEM;
-
-	cpumask_copy(saved, current->cpus_ptr);
-
-	ret = set_cpus_allowed_ptr(current, cpumask_of(raw_smp_processor_id()));
-	if (ret)
-		goto out;
-
-	collect_data(irq, preempt, irq_save, n);
-	set_cpus_allowed_ptr(current, saved);
-
-	WRITE_ONCE(irq_stat.percentile, compute_percentile(nth_percent, irq, n));
-	WRITE_ONCE(preempt_stat.percentile, compute_percentile(nth_percent, preempt, n));
-	WRITE_ONCE(irq_save_stat.percentile, compute_percentile(nth_percent, irq_save, n));
-
-out:
-	free_cpumask_var(saved);
-
-	return ret ? ret : count;
-}
-
-static const struct file_operations percentile_fops = {
-	.owner	= THIS_MODULE,
-	.write	= percentile_write,
-	.llseek = noop_llseek,
-	.open	= simple_open,
-};
-
 struct debugfs_config {
 	const char *filename;
 	const struct file_operations *fops;
@@ -748,12 +675,6 @@ static int __init mod_init(void)
 		return PTR_ERR(rootdir);
 
 	file = debugfs_create_file("benchmark", 0200, rootdir, NULL, &benchmark_fops);
-	if (IS_ERR(file)) {
-		ret = PTR_ERR(file);
-		goto err;
-	}
-
-	file = debugfs_create_file("percentile", 0200, rootdir, NULL, &percentile_fops);
 	if (IS_ERR(file)) {
 		ret = PTR_ERR(file);
 		goto err;

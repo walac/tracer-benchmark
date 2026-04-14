@@ -78,7 +78,6 @@ After loading the module, the following tree is created under debugfs:
     nth_percentile      (rw)  configuration
     do_work             (rw)  configuration
     benchmark           (-w)  trigger
-    percentile          (-w)  trigger
     irq/
         median          (r-)  result
         average         (r-)  result
@@ -118,7 +117,6 @@ also rejects values greater than 100. `do_work` is a boolean toggle
 | File         | Description                                                     |
 |--------------|-----------------------------------------------------------------|
 | `benchmark`  | Write anything to start the full per-CPU benchmark run          |
-| `percentile` | Write a value between 1 and 100 to compute that percentile      |
 
 ### Result Files (read-only)
 
