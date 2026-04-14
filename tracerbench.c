@@ -296,7 +296,7 @@ static void compute_one_stat(struct statistics *stat, u64 *samples, size_t n)
 
 	/* median_and_max() sorts the array, so percentile is a simple lookup */
 	WARN_ON(check_mul_overflow(n, READ_ONCE(nth_percentile.cached), &pct_idx));
-	pct_idx = clamp(pct_idx / 100, 0, n - 1);
+	pct_idx = clamp_t(size_t, pct_idx / 100, 0, n - 1);
 	stat->percentile = samples[pct_idx];
 }
 
