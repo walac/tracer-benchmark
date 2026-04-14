@@ -63,6 +63,7 @@ fi
 
 echo "$NR_SAMPLES" > "$DEBUGFS/nr_samples"
 echo "$PERCENTILE" > "$DEBUGFS/nth_percentile"
+echo Y > "$DEBUGFS/do_work"
 echo 1 > "$DEBUGFS/benchmark"
 
 disable_tracepoints
