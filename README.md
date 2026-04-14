@@ -35,8 +35,8 @@ sudo insmod tracerbench.ko
   3. `local_irq_save()` + `local_irq_restore()`
 - **Statistical analysis**: median, average, maximum, and average of the
   top-N highest samples (`max_avg`)
-- **Percentile computation**: independent single-CPU operation for
-  arbitrary percentile calculation
+- **Percentile computation**: configurable nth percentile computed
+  during the benchmark run (default: 99th)
 - **Results exported via debugfs**
 
 ## How It Works
@@ -48,15 +48,15 @@ benchmark run. The write does not return until all CPUs have finished
 sampling and the results have been aggregated. Only one benchmark can
 run at a time; concurrent writes are serialized.
 
-Before spawning threads, the current `nr_samples` and `nr_highest`
-values are snapshotted so that configuration changes via debugfs do
-not affect a running benchmark. Note that `nr_highest` is clamped to
-`nr_samples` if it exceeds it.
+Before spawning threads, the current `nr_samples`, `nr_highest`, and
+`nth_percentile` values are snapshotted so that configuration changes
+via debugfs do not affect a running benchmark. Note that `nr_highest`
+is clamped to `nr_samples` if it exceeds it.
 
 Each CPU then simultaneously collects `nr_samples` timing measurements
 of the disable/enable pairs and computes per-CPU statistics (median,
-average, max). After all CPUs finish, results are aggregated into the
-global statistics:
+average, max, percentile). After all CPUs finish, results are
+aggregated into the global statistics:
 
 - **median**: median of per-CPU medians
 - **avg**: mean of per-CPU averages (valid because sample counts are
@@ -64,15 +64,8 @@ global statistics:
 - **max**: maximum across all CPUs
 - **max_avg**: average of the globally highest samples, tracked via
   min-heaps that each CPU feeds into
-
-### Percentile
-
-Writing a value (1-100) to the `percentile` file collects fresh samples
-on the **current CPU only**, sorts them, and computes the nth percentile.
-This is independent of the benchmark flow and uses the live `nr_samples`
-value (not the snapshotted benchmark value), so changing `nr_samples`
-between a benchmark and a percentile run will affect the number of
-samples collected.
+- **percentile**: maximum of per-CPU nth percentiles (worst-case
+  across CPUs)
 
 ## debugfs Interface
 
@@ -82,6 +75,7 @@ After loading the module, the following tree is created under debugfs:
 /sys/kernel/debug/tracerbench/
     nr_samples          (rw)  configuration
     nr_highest          (rw)  configuration
+    nth_percentile      (rw)  configuration
     do_work             (rw)  configuration
     benchmark           (-w)  trigger
     percentile          (-w)  trigger
@@ -107,14 +101,17 @@ After loading the module, the following tree is created under debugfs:
 
 ### Configuration Files
 
-| File         | Description                                                  |
-|--------------|--------------------------------------------------------------|
-| `nr_samples` | Number of samples per CPU (default: 10,000)                  |
-| `nr_highest` | Number of highest samples to track for `max_avg` (default: 100) |
-| `do_work`    | Simulate critical section work between disable/enable (default: 0) |
+| File             | Description                                                  |
+|------------------|--------------------------------------------------------------|
+| `nr_samples`     | Number of samples per CPU (default: 10,000)                  |
+| `nr_highest`     | Number of highest samples to track for `max_avg` (default: 100) |
+| `nth_percentile` | Which percentile to compute, 1-100 (default: 99)             |
+| `do_work`        | Simulate critical section work between disable/enable (default: 0) |
 
-`nr_samples` and `nr_highest` are readable and writable. Zero values
-are rejected with `-EINVAL`.  `do_work` is a boolean toggle (0 or 1).
+`nr_samples`, `nr_highest`, and `nth_percentile` are readable and
+writable. Zero values are rejected with `-EINVAL`. `nth_percentile`
+also rejects values greater than 100. `do_work` is a boolean toggle
+(0 or 1).
 
 ### Trigger Files (write-only)
 
@@ -136,7 +133,7 @@ Each contains:
 | `average`    | Average latency (cycles)                          |
 | `max`        | Maximum single-sample latency (cycles)            |
 | `max_avg`    | Average of the top-N highest samples (cycles)     |
-| `percentile` | Nth percentile from the last `percentile` run     |
+| `percentile` | Nth percentile (worst-case across CPUs, cycles)   |
 
 ### Example Usage
 
@@ -157,17 +154,17 @@ echo 1 > benchmark
 cat irq/average
 cat preempt/max
 cat irq_save/average
+cat irq/percentile     # 99th percentile (default)
 
 # Run again with simulated critical section work
 echo 1 > do_work
 echo 1 > benchmark
 cat irq/average        # compare with previous run
 
-# Calculate the 99th percentile (runs on current CPU only)
-echo 99 > percentile
-cat irq/percentile
-cat preempt/percentile
-cat irq_save/percentile
+# Change the percentile and re-run
+echo 95 > nth_percentile
+echo 1 > benchmark
+cat irq/percentile     # now shows 95th percentile
 ```
 
 ## Design
@@ -201,8 +198,9 @@ globally worst-case latencies without requiring O(total_samples) global
 memory.
 
 Global aggregation computes median-of-medians, mean-of-means (valid
-because all CPUs contribute equal sample counts), and max-of-maxes.
-The `max_avg` statistic is the arithmetic mean of the min-heap contents.
+because all CPUs contribute equal sample counts), max-of-maxes, and
+max-of-percentiles (worst-case nth percentile across CPUs). The
+`max_avg` statistic is the arithmetic mean of the min-heap contents.
 
 Memory management uses RAII-style `__free(kvfree)` annotations for
 automatic cleanup of per-thread buffers. Heap memory is managed

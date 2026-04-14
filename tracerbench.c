@@ -58,6 +58,7 @@ struct config {
 
 static struct config nr_samples = { .val = 10000 };
 static struct config nr_highest = { .val = 100 };
+static struct config nth_percentile = { .val = 99 };
 static bool do_work;
 
 DEFINE_MIN_HEAP(u64, u64_min_heap);
@@ -136,6 +137,21 @@ DEFINE_DEBUGFS_ATTRIBUTE(name##_fops, name##_get, name##_set, "%llu\n")
 
 DEFINE_CONFIG_ATTR(nr_samples);
 DEFINE_CONFIG_ATTR(nr_highest);
+
+static int nth_percentile_get(void *data, u64 *val)
+{
+	*val = READ_ONCE(nth_percentile.val);
+	return 0;
+}
+static int nth_percentile_set(void *data, u64 val)
+{
+	if (!val || val > 100)
+		return -EINVAL;
+	WRITE_ONCE(nth_percentile.val, val);
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(nth_percentile_fops, nth_percentile_get,
+			 nth_percentile_set, "%llu\n");
 
 static const struct debugfs_results debugfs_result_files[] = {
 	{
@@ -229,7 +245,7 @@ static u64 compute_heap_average(struct u64_min_heap *h)
 	return total / n;
 }
 
-static u64 nth_percentile(u64 percentile, u64 *p, size_t n)
+static u64 compute_percentile(u64 percentile, u64 *p, size_t n)
 {
 	size_t tmp, pos;
 
@@ -280,6 +296,7 @@ static int init_heaps(void)
 
 static void compute_one_stat(struct statistics *stat, u64 *samples, size_t n)
 {
+	size_t pct_idx;
 	u64 total = 0;
 
 	for (size_t i = 0; i < n; ++i)
@@ -287,6 +304,11 @@ static void compute_one_stat(struct statistics *stat, u64 *samples, size_t n)
 
 	stat->median	= median_and_max(samples, n, &stat->max);
 	stat->avg	= total / n;
+
+	/* median_and_max() sorts the array, so percentile is a simple lookup */
+	WARN_ON(check_mul_overflow(n, READ_ONCE(nth_percentile.cached), &pct_idx));
+	pct_idx = clamp(pct_idx / 100, 0, n - 1);
+	stat->percentile = samples[pct_idx];
 }
 
 static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
@@ -483,12 +505,14 @@ static struct smp_hotplug_thread sample_thread = {
 };
 
 static void aggregate_stat(struct statistics *stat, struct u64_min_heap *heap,
-			   u64 *medians, u64 total, u64 max_val, size_t nr_cpus)
+			   u64 *medians, u64 total, u64 max_val,
+			   u64 max_percentile, size_t nr_cpus)
 {
-	stat->median	= median_and_max(medians, nr_cpus, NULL);
-	stat->avg	= total / nr_cpus;
-	stat->max	= max_val;
-	stat->max_avg	= compute_heap_average(heap);
+	stat->median		= median_and_max(medians, nr_cpus, NULL);
+	stat->avg		= total / nr_cpus;
+	stat->max		= max_val;
+	stat->max_avg		= compute_heap_average(heap);
+	stat->percentile	= max_percentile;
 }
 
 static int run_benchmark(void)
@@ -501,6 +525,7 @@ static int run_benchmark(void)
 	unsigned int cpu;
 	u64 irq_total = 0, preempt_total = 0, irq_save_total = 0;
 	u64 irq_max = 0, preempt_max = 0, irq_save_max = 0;
+	u64 irq_pct = 0, preempt_pct = 0, irq_save_pct = 0;
 
 	scoped_guard(cpus_read_lock) {
 		ret = smpboot_register_percpu_thread(&sample_thread);
@@ -540,23 +565,26 @@ static int run_benchmark(void)
 						   &irq_save_total));
 
 			irq_max			= max(irq_max, my_data->irq.max);
+			irq_pct			= max(irq_pct, my_data->irq.percentile);
 			irq_medians[i]		= my_data->irq.median;
 
 			preempt_max		= max(preempt_max, my_data->preempt.max);
+			preempt_pct		= max(preempt_pct, my_data->preempt.percentile);
 			preempt_medians[i]	= my_data->preempt.median;
 
 			irq_save_max		= max(irq_save_max, my_data->irq_save.max);
+			irq_save_pct		= max(irq_save_pct, my_data->irq_save.percentile);
 			irq_save_medians[i]	= my_data->irq_save.median;
 			++i;
 		}
 	}
 
 	aggregate_stat(&irq_stat, &irq_heap, irq_medians,
-		       irq_total, irq_max, nr_cpus);
+		       irq_total, irq_max, irq_pct, nr_cpus);
 	aggregate_stat(&preempt_stat, &preempt_heap, preempt_medians,
-		       preempt_total, preempt_max, nr_cpus);
+		       preempt_total, preempt_max, preempt_pct, nr_cpus);
 	aggregate_stat(&irq_save_stat, &irq_save_heap, irq_save_medians,
-		       irq_save_total, irq_save_max, nr_cpus);
+		       irq_save_total, irq_save_max, irq_save_pct, nr_cpus);
 
 	return 0;
 }
@@ -578,6 +606,7 @@ static ssize_t benchmark_write(struct file *file, const char __user *buffer,
 
 	WRITE_ONCE(nr_samples.cached, n);
 	WRITE_ONCE(nr_highest.cached, min(n, READ_ONCE(nr_highest.val)));
+	WRITE_ONCE(nth_percentile.cached, READ_ONCE(nth_percentile.val));
 
 	ret = init_heaps();
 	if (ret)
@@ -643,9 +672,9 @@ static ssize_t percentile_write(struct file *file, const char __user *buffer,
 	collect_data(irq, preempt, irq_save, n);
 	set_cpus_allowed_ptr(current, saved);
 
-	WRITE_ONCE(irq_stat.percentile, nth_percentile(nth_percent, irq, n));
-	WRITE_ONCE(preempt_stat.percentile, nth_percentile(nth_percent, preempt, n));
-	WRITE_ONCE(irq_save_stat.percentile, nth_percentile(nth_percent, irq_save, n));
+	WRITE_ONCE(irq_stat.percentile, compute_percentile(nth_percent, irq, n));
+	WRITE_ONCE(preempt_stat.percentile, compute_percentile(nth_percent, preempt, n));
+	WRITE_ONCE(irq_save_stat.percentile, compute_percentile(nth_percent, irq_save, n));
 
 out:
 	free_cpumask_var(saved);
@@ -667,9 +696,10 @@ struct debugfs_config {
 
 #define CONFIG_ENTRY(name)	{ #name, &name##_fops }
 
-static const struct debugfs_config __initdata configs[] = {
+static const struct debugfs_config configs[] = {
 	CONFIG_ENTRY(nr_samples),
 	CONFIG_ENTRY(nr_highest),
+	CONFIG_ENTRY(nth_percentile),
 };
 
 static void __init create_config_files(struct dentry *parent)
