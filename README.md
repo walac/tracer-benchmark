@@ -184,8 +184,7 @@ When `do_work` is enabled, a `noinline` function
 pair.  It performs a percpu read-modify-write with a data-dependent
 branch and a `current->pid` access, representative of what real
 critical sections do.  The cost of this simulated work is included in
-the timer overhead measurement and subtracted from each sample, so
-results still reflect only the disable/enable cost.
+the raw cycle counts reported by the benchmark.
 
 Per-CPU statistics are computed locally. Sorting (for median and max)
 is done in a single pass via `median_and_max()`. Each CPU then feeds

@@ -351,35 +351,6 @@ static noinline void simulate_critical_section(void)
 	WRITE_ONCE(*p, val + 1);
 }
 
-#define OVERHEAD_SAMPLES 100
-
-/*
- * Measure the cost of the timing infrastructure itself.
- *
- * Take the median of OVERHEAD_SAMPLES back-to-back get_cycles() pairs
- * to get a stable estimate of the timer overhead.  The median resists
- * outliers from interrupts and VM exits.  When do_work is enabled,
- * include the cost of simulate_critical_section() in the overhead so
- * that it is subtracted from the final results, isolating only the
- * disable/enable cost.
- */
-static noinline u64 measure_overhead(void)
-{
-	const bool work = READ_ONCE(do_work);
-	u64 samples[OVERHEAD_SAMPLES];
-	size_t i;
-
-	for (i = 0; i < OVERHEAD_SAMPLES; ++i) {
-		const u64 ts = get_cycles();
-
-		if (work)
-			simulate_critical_section();
-		samples[i] = get_cycles() - ts;
-	}
-
-	return median_and_max(samples, OVERHEAD_SAMPLES, NULL);
-}
-
 #define time_diff(call, work) ({	\
 	const u64 ts = get_cycles();	\
 	call##_disable();		\
@@ -399,20 +370,9 @@ static noinline u64 measure_overhead(void)
 	get_cycles() - ts;			\
 })
 
-static void subtract_overhead(u64 *samples, size_t n, u64 overhead)
-{
-	for (size_t i = 0; i < n; ++i) {
-		if (samples[i] > overhead)
-			samples[i] -= overhead;
-		else
-			samples[i] = 0;
-	}
-}
-
 static void collect_data(u64 *irq, u64 *preempt, u64 *irq_save, size_t n)
 {
 	const bool work = READ_ONCE(do_work);
-	u64 overhead;
 	size_t i;
 
 	for (i = 0; i < n; ++i)
@@ -423,11 +383,6 @@ static void collect_data(u64 *irq, u64 *preempt, u64 *irq_save, size_t n)
 
 	for (i = 0; i < n; ++i)
 		irq_save[i] = time_diff_save_restore(work);
-
-	overhead = measure_overhead();
-	subtract_overhead(irq, n, overhead);
-	subtract_overhead(preempt, n, overhead);
-	subtract_overhead(irq_save, n, overhead);
 }
 
 static void sample_thread_fn(unsigned int cpu)
