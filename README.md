@@ -76,7 +76,6 @@ After loading the module, the following tree is created under debugfs:
     nr_samples          (rw)  configuration
     nr_highest          (rw)  configuration
     nth_percentile      (rw)  configuration
-    do_work             (rw)  configuration
     benchmark           (-w)  trigger
     irq/
         median          (r-)  result
@@ -105,12 +104,10 @@ After loading the module, the following tree is created under debugfs:
 | `nr_samples`     | Number of samples per CPU (default: 10,000)                  |
 | `nr_highest`     | Number of highest samples to track for `max_avg` (default: 100) |
 | `nth_percentile` | Which percentile to compute, 1-100 (default: 99)             |
-| `do_work`        | Simulate critical section work between disable/enable (default: 0) |
 
 `nr_samples`, `nr_highest`, and `nth_percentile` are readable and
 writable. Zero values are rejected with `-EINVAL`. `nth_percentile`
-also rejects values greater than 100. `do_work` is a boolean toggle
-(0 or 1).
+also rejects values greater than 100.
 
 ### Trigger Files (write-only)
 
@@ -154,11 +151,6 @@ cat preempt/max
 cat irq_save/average
 cat irq/percentile     # 99th percentile (default)
 
-# Run again with simulated critical section work
-echo 1 > do_work
-echo 1 > benchmark
-cat irq/average        # compare with previous run
-
 # Change the percentile and re-run
 echo 95 > nth_percentile
 echo 1 > benchmark
@@ -178,13 +170,6 @@ likewise for `preempt`), measuring the elapsed time via `get_cycles()`.
 A separate `time_diff_save_restore()` macro handles the
 `local_irq_save()`/`local_irq_restore()` pair, which requires a flags
 argument.
-
-When `do_work` is enabled, a `noinline` function
-`simulate_critical_section()` is called between each disable/enable
-pair.  It performs a percpu read-modify-write with a data-dependent
-branch and a `current->pid` access, representative of what real
-critical sections do.  The cost of this simulated work is included in
-the raw cycle counts reported by the benchmark.
 
 Per-CPU statistics are computed locally. Sorting (for median and max)
 is done in a single pass via `median_and_max()`. Each CPU then feeds

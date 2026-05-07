@@ -59,7 +59,6 @@ struct config {
 static struct config nr_samples = { .val = 10000 };
 static struct config nr_highest = { .val = 100 };
 static struct config nth_percentile = { .val = 99 };
-static bool do_work;
 
 DEFINE_MIN_HEAP(u64, u64_min_heap);
 
@@ -309,80 +308,33 @@ static void compute_statistics(struct percpu_data *my_data, u64 *irq_data,
 	compute_one_stat(&my_data->irq_save, irq_save_data, n);
 }
 
-/*
- * Simulate a realistic critical section.
- *
- * Back-to-back disable/enable with no work between them never occurs in
- * real kernel code and gives the CPU pipeline, branch predictor, and
- * register allocator an unrealistically easy job.  This function
- * provides a lightweight workload representative of what actual critical
- * sections do:
- *
- *  - Percpu read-modify-write (the most common pattern inside
- *    local_irq_save/restore critical sections, e.g. softirq pending
- *    bits, statistics counters).
- *
- *  - Data-dependent branch that is hard for the branch predictor to
- *    learn, unlike a constant-condition loop.
- *
- *  - Access to current->pid, which touches a different cache line than
- *    the percpu variable, simulating the mixed-locality memory access
- *    patterns typical of real critical sections.
- *
- * Marked noinline so the compiler cannot fold this into the
- * disable/enable macros, which would change their code generation
- * and defeat the purpose of measuring their overhead in a realistic
- * register-pressure context.
- *
- * Controlled by the 'do_work' debugfs toggle (default off).
- */
-static DEFINE_PER_CPU(unsigned long, work_counter);
-
-static noinline void simulate_critical_section(void)
-{
-	unsigned long *p = this_cpu_ptr(&work_counter);
-	unsigned long val = READ_ONCE(*p);
-
-	if (val & 0x1)
-		val += raw_smp_processor_id();
-	else
-		val ^= current->pid;
-
-	WRITE_ONCE(*p, val + 1);
-}
-
-#define time_diff(call, work) ({	\
+#define time_diff(call) ({		\
 	const u64 ts = get_cycles();	\
 	call##_disable();		\
-	if (work)			\
-		simulate_critical_section();\
 	call##_enable();		\
 	get_cycles() - ts;		\
 })
 
-#define time_diff_save_restore(work) ({		\
+#define time_diff_save_restore() ({		\
 	unsigned long __flags;			\
 	const u64 ts = get_cycles();		\
 	local_irq_save(__flags);		\
-	if (work)				\
-		simulate_critical_section();	\
 	local_irq_restore(__flags);		\
 	get_cycles() - ts;			\
 })
 
 static void collect_data(u64 *irq, u64 *preempt, u64 *irq_save, size_t n)
 {
-	const bool work = READ_ONCE(do_work);
 	size_t i;
 
 	for (i = 0; i < n; ++i)
-		irq[i] = time_diff(local_irq, work);
+		irq[i] = time_diff(local_irq);
 
 	for (i = 0; i < n; ++i)
-		preempt[i] = time_diff(preempt, work);
+		preempt[i] = time_diff(preempt);
 
 	for (i = 0; i < n; ++i)
-		irq_save[i] = time_diff_save_restore(work);
+		irq_save[i] = time_diff_save_restore();
 }
 
 static void sample_thread_fn(unsigned int cpu)
@@ -589,7 +541,6 @@ static void __init create_config_files(struct dentry *parent)
 	for (size_t i = 0; i < ARRAY_SIZE(configs); ++i)
 		debugfs_create_file_unsafe(configs[i].filename, 0644,
 					   parent, NULL, configs[i].fops);
-	debugfs_create_bool("do_work", 0644, parent, &do_work);
 }
 
 

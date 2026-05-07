@@ -4,23 +4,20 @@
 set -euo pipefail
 
 usage() {
-	echo "Usage: $0 [-n nr_samples] [-p percentile] [-t] [-w]" >&2
+	echo "Usage: $0 [-n nr_samples] [-p percentile] [-t]" >&2
 	echo "  -t  enable preemptirq tracepoints before benchmarking" >&2
-	echo "  -w  enable simulated critical section work" >&2
 	exit 1
 }
 
 NR_SAMPLES=100000
 PERCENTILE=99
 ENABLE_TRACEPOINTS=0
-DO_WORK=0
 
-while getopts "n:p:twh" opt; do
+while getopts "n:p:th" opt; do
 	case $opt in
 	n) NR_SAMPLES="$OPTARG" ;;
 	p) PERCENTILE="$OPTARG" ;;
 	t) ENABLE_TRACEPOINTS=1 ;;
-	w) DO_WORK=1 ;;
 	*) usage ;;
 	esac
 done
@@ -66,11 +63,6 @@ fi
 
 echo "$NR_SAMPLES" > "$DEBUGFS/nr_samples"
 echo "$PERCENTILE" > "$DEBUGFS/nth_percentile"
-if [ "$DO_WORK" -eq 1 ]; then
-	echo Y > "$DEBUGFS/do_work"
-else
-	echo N > "$DEBUGFS/do_work"
-fi
 echo 1 > "$DEBUGFS/benchmark"
 
 disable_tracepoints
