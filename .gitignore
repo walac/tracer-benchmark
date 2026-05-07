@@ -10,3 +10,5 @@ CLAUDE.md
 .serena/
 .cache/
 .claude
+.mcp.json
+.semcode.db
